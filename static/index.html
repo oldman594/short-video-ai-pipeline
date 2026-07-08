@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Short Video AI Pipeline</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">SV</div>
+          <div>
+            <h1>短视频 AI 流水线</h1>
+            <p>导入、分析、改写、审核、生成草稿</p>
+          </div>
+        </div>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>新建项目</h2>
+          </div>
+          <form id="project-form" class="stack">
+            <label>
+              <span>来源类型</span>
+              <select name="source_type" id="source-type">
+                <option value="link">视频链接</option>
+                <option value="upload">上传视频</option>
+              </select>
+            </label>
+            <label>
+              <span>文本提取方式</span>
+              <select name="extraction_preference" id="extraction-preference">
+                <option value="auto">自动判断</option>
+                <option value="subtitle_track">有字幕轨：FFmpeg / MKVToolNix</option>
+                <option value="speech">只有说话声音：Whisper / 云语音识别</option>
+                <option value="screen_text">文字在画面上：OCR</option>
+                <option value="network_captions">网络视频：先抓字幕</option>
+              </select>
+            </label>
+            <label>
+              <span>标题</span>
+              <input name="title" placeholder="例如：职场沟通的三个误区" required />
+            </label>
+            <label>
+              <span>平台</span>
+              <input name="platform" placeholder="douyin / xiaohongshu / bilibili" />
+            </label>
+            <label id="link-field">
+              <span>视频链接</span>
+              <input name="source_url" placeholder="粘贴可访问的视频链接" />
+            </label>
+            <label id="upload-field">
+              <span id="upload-label">已下载视频文件（可选）</span>
+              <input name="file" type="file" accept="video/*,audio/*" />
+              <small id="upload-help">链接会记录来源；如果平台链接无法直接提取，请附带你本地保存的视频文件，由服务端提取文本。</small>
+            </label>
+            <label>
+              <span>补充说明</span>
+              <textarea name="notes" rows="3" placeholder="账号人设、目标观众或改写方向"></textarea>
+            </label>
+            <button class="primary" type="submit">创建并分析</button>
+          </form>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header row">
+            <h2>服务端工具</h2>
+            <button id="refresh-tools" class="ghost" type="button">检查</button>
+          </div>
+          <div id="tool-status" class="tool-status"></div>
+        </section>
+
+        <section class="panel project-list-panel">
+          <div class="panel-header row">
+            <h2>项目</h2>
+            <button id="refresh-projects" class="ghost" type="button">刷新</button>
+          </div>
+          <div id="project-list" class="project-list"></div>
+        </section>
+      </aside>
+
+      <section class="workspace">
+        <div id="empty-state" class="empty-state">
+          <h2>选择或创建一个项目</h2>
+          <p>系统会自动生成模拟转写、内容分析、三个原创脚本版本，并等待你审核。</p>
+        </div>
+
+        <article id="project-detail" class="detail hidden">
+          <header class="detail-header">
+            <div>
+              <p id="project-platform" class="eyebrow"></p>
+              <h2 id="project-title"></h2>
+              <p id="project-meta" class="muted"></p>
+            </div>
+            <div id="project-status" class="status-pill"></div>
+          </header>
+
+          <div id="project-error" class="notice error hidden"></div>
+          <div id="extraction-info" class="notice info hidden"></div>
+
+          <section class="detail-grid">
+            <div class="panel">
+              <div class="panel-header row">
+                <h3>转写文本</h3>
+                <button id="save-transcript" class="ghost" type="button">保存</button>
+              </div>
+              <textarea id="transcript-text" class="editor" rows="11"></textarea>
+            </div>
+
+            <div class="panel">
+              <div class="panel-header">
+                <h3>结构分析</h3>
+              </div>
+              <div id="analysis-view" class="analysis"></div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-header row">
+              <h3>脚本审核</h3>
+              <div id="script-tabs" class="tabs"></div>
+            </div>
+            <textarea id="script-editor" class="editor script-editor" rows="15"></textarea>
+            <div class="script-actions">
+              <button id="save-script" class="ghost" type="button">保存脚本</button>
+              <button id="approve-script" class="primary" type="button">批准此版本</button>
+              <button id="render-script" class="secondary" type="button">生成草稿</button>
+            </div>
+          </section>
+
+          <section class="detail-grid">
+            <div class="panel">
+              <div class="panel-header">
+                <h3>发布辅助</h3>
+              </div>
+              <div id="publish-copy" class="publish-copy"></div>
+            </div>
+            <div class="panel">
+              <div class="panel-header">
+                <h3>渲染任务</h3>
+              </div>
+              <div id="render-jobs" class="render-jobs"></div>
+            </div>
+          </section>
+        </article>
+      </section>
+    </main>
+
+    <div id="toast" class="toast hidden"></div>
+    <script src="/app.js"></script>
+  </body>
+</html>
