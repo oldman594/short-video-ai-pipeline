@@ -325,13 +325,9 @@ class TextExtractionRouter:
 
         speech = self.extractors["speech"].extract(source)
         ocr = self.extractors["screen_text"].extract(source)
-        real_results = [
-            result
-            for result in (speech, ocr)
-            if not is_fallback_provider(result.provider)
-        ]
         warnings = [*subtitle.warnings, *speech.warnings, *ocr.warnings]
-        if not real_results:
+        selected = select_best_local_auto_result(speech, ocr)
+        if selected is None:
             fallback = ocr if ocr.warnings else speech
             return ExtractionResult(
                 raw_text=fallback.raw_text,
@@ -341,37 +337,15 @@ class TextExtractionRouter:
                 extraction_method=fallback.extraction_method,
                 warnings=warnings,
             ).to_transcript()
-        if len(real_results) == 1:
-            result = real_results[0]
-            return ExtractionResult(
-                raw_text=result.raw_text,
-                segments=result.segments,
-                language=result.language,
-                provider=result.provider,
-                extraction_method=result.extraction_method,
-                warnings=warnings,
-                subtitle_file_url=result.subtitle_file_url,
-            ).to_transcript()
 
-        raw_text = "\n\n".join(
-            f"[{result.extraction_method} / {result.provider}]\n{result.raw_text}"
-            for result in real_results
-        )
-        combined = result_from_text(
-            raw_text,
-            provider="+".join(result.provider for result in real_results),
-            extraction_method="auto_combined",
-            warnings=warnings,
-        )
-        subtitle_urls = [result.subtitle_file_url for result in real_results if result.subtitle_file_url]
         return ExtractionResult(
-            raw_text=combined.raw_text,
-            segments=combined.segments,
-            language=combined.language,
-            provider=combined.provider,
-            extraction_method=combined.extraction_method,
-            warnings=combined.warnings,
-            subtitle_file_url=subtitle_urls[0] if subtitle_urls else None,
+            raw_text=selected.raw_text,
+            segments=selected.segments,
+            language=selected.language,
+            provider=selected.provider,
+            extraction_method=selected.extraction_method,
+            warnings=warnings,
+            subtitle_file_url=selected.subtitle_file_url,
         ).to_transcript()
 
     def plan(self, source: SourceInput, preference: str) -> list[str]:
@@ -422,6 +396,45 @@ def text_extraction_tool_status() -> dict:
         "network_fetch_enabled": os.environ.get("ALLOW_NETWORK_MEDIA_FETCH") == "1",
         "server_side_extraction": True,
     }
+
+
+def select_best_local_auto_result(
+    speech: ExtractionResult,
+    ocr: ExtractionResult,
+) -> ExtractionResult | None:
+    speech_real = not is_fallback_provider(speech.provider)
+    ocr_real = not is_fallback_provider(ocr.provider)
+    if ocr_real and screen_text_quality_score(ocr) >= 5:
+        return ocr
+    if speech_real:
+        return speech
+    if ocr_real:
+        return ocr
+    return None
+
+
+def screen_text_quality_score(result: ExtractionResult) -> int:
+    text = result.raw_text.strip()
+    if not text:
+        return 0
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", text))
+    score = 0
+    if result.provider == "ffmpeg-rapidocr":
+        score += 3
+    elif result.provider == "ffmpeg-tesseract":
+        score += 1
+    if cjk_count >= 12:
+        score += 3
+    elif cjk_count >= 6:
+        score += 2
+    if len(lines) >= 2:
+        score += 2
+    elif len(lines) == 1:
+        score += 1
+    if any(len(re.findall(r"[\u4e00-\u9fff]", line)) >= 4 for line in lines):
+        score += 1
+    return score
 
 
 def read_sidecar_subtitle(video_path: Path) -> str | None:

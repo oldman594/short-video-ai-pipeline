@@ -38,7 +38,7 @@ No schema changes. Successful hard-subtitle OCR now reports:
 ## Validation Results
 
 - `python3 scripts/extract_text_local.py vision/61354d2054ca8878ffe02059f360e7fe.mp4 --mode screen_text --json` returned `provider: ffmpeg-rapidocr` with 8 subtitle lines.
-- `python3 scripts/extract_text_local.py vision/61354d2054ca8878ffe02059f360e7fe.mp4 --mode auto` returned `provider: whisper.cpp+ffmpeg-rapidocr`.
+- Later RFD 0009 changes local `auto` from combined output to best-result arbitration.
 - `python3 -m unittest discover -s tests` passed with 16 tests.
 - `python3 scripts/check_line_coverage.py` passed with 90.9% measured line coverage.
 - `python3 -m compileall app tests scripts` passed.

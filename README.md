@@ -93,7 +93,7 @@ python3 scripts/extract_text_local.py vision/61354d2054ca8878ffe02059f360e7fe.mp
 
 创建项目时可以选择：
 
-- `自动判断`：本地上传先尝试字幕轨；如果没有独立字幕轨，同时运行语音识别和画面硬字幕 OCR。
+- `自动判断`：本地上传先尝试字幕轨；如果没有独立字幕轨，会对语音识别和画面硬字幕 OCR 做质量仲裁，只返回一个最佳结果。
 - `有字幕轨`：优先读取同名 `.srt` / `.vtt` / `.ass` 文件，其次尝试 FFmpeg 内嵌字幕轨。
 - `只有说话声音`：使用 Whisper / whisper.cpp，后续可替换为云语音识别。
 - `文字在画面上`：优先使用 FFmpeg 抽帧 + RapidOCR；未安装 RapidOCR 时回退 Tesseract OCR。

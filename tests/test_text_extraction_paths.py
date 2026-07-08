@@ -31,6 +31,8 @@ from app.text_extraction import (
     read_sidecar_subtitle,
     result_from_text,
     restore_punctuation,
+    screen_text_quality_score,
+    select_best_local_auto_result,
     segments_from_text,
     split_long_segments,
     text_extraction_tool_status,
@@ -352,22 +354,23 @@ class TextExtractionBranchTest(unittest.TestCase):
         ocr_config = rapidocr_python_config()
         self.assertTrue(ocr_config is None or "python" in ocr_config)
 
-    def test_auto_local_media_combines_speech_and_screen_text_after_subtitle_fallback(self) -> None:
+    def test_auto_local_media_selects_high_quality_screen_text_over_speech(self) -> None:
         # Test objective:
-        # Verify that auto mode does not stop after ASR when local media may also
-        # contain burned-in visual subtitles.
+        # Verify that auto mode returns a single best transcript and prefers strong
+        # visual subtitle OCR over ASR when both are available.
         #
         # Construction method:
         # 1. Replace router extractors with small fake extractors.
         # 2. Make subtitle-track return a fallback result.
-        # 3. Make speech and screen_text both return real results.
+        # 3. Make speech and screen_text both return real results, with OCR using
+        #    enough Chinese subtitle text to pass the quality threshold.
         #
         # Input data:
         # A local media source with a source_file_path.
         #
         # Expected behavior:
-        # Auto mode returns an auto_combined transcript containing both ASR text and
-        # OCR text, with provider names joined for traceability.
+        # Auto mode returns the OCR transcript only; ASR text is not mixed into the
+        # user-facing raw_text.
         class FakeExtractor:
             def __init__(self, method: str, provider: str, text: str, warnings: list[str] | None = None):
                 self.method = method
@@ -387,7 +390,7 @@ class TextExtractionBranchTest(unittest.TestCase):
         router.extractors = {
             "subtitle_track": FakeExtractor("subtitle_track", "subtitle-fallback", "fallback", ["no track"]),
             "speech": FakeExtractor("speech", "whisper.cpp", "语音文本"),
-            "screen_text": FakeExtractor("screen_text", "ffmpeg-tesseract", "画面字幕"),
+            "screen_text": FakeExtractor("screen_text", "ffmpeg-rapidocr", "第一行画面字幕\n第二行画面字幕"),
             "network_captions": NetworkCaptionsExtractor(),
         }
         router.extractors["speech"].extract = lambda _source: ExtractionResult(
@@ -401,11 +404,33 @@ class TextExtractionBranchTest(unittest.TestCase):
         )
         result = router.extract(source(source_file_path="/tmp/media.mp4"), "auto")
 
-        self.assertEqual(result["extraction_method"], "auto_combined")
-        self.assertEqual(result["provider"], "whisper.cpp+ffmpeg-tesseract")
-        self.assertIn("语音文本", result["raw_text"])
-        self.assertIn("画面字幕", result["raw_text"])
-        self.assertEqual(result["subtitle_file_url"], "/outputs/speech-test.srt")
+        self.assertEqual(result["extraction_method"], "screen_text")
+        self.assertEqual(result["provider"], "ffmpeg-rapidocr")
+        self.assertNotIn("语音文本", result["raw_text"])
+        self.assertIn("第一行画面字幕", result["raw_text"])
+        self.assertNotIn("subtitle_file_url", result)
+
+    def test_auto_local_media_falls_back_to_speech_when_screen_text_quality_is_low(self) -> None:
+        # Test objective:
+        # Ensure that a weak OCR result does not override a real speech transcript.
+        #
+        # Construction method:
+        # Call the auto-result arbitration helper directly with a real ASR result and
+        # a short noisy OCR result that does not meet the visual-text score threshold.
+        #
+        # Input data:
+        # Synthetic ExtractionResult records for speech and OCR candidates.
+        #
+        # Expected behavior:
+        # The selector chooses speech for low-quality OCR, but chooses OCR when the
+        # OCR quality score is strong.
+        speech = result_from_text("语音转写文本", "whisper.cpp", "speech", [])
+        low_ocr = result_from_text("噪声", "ffmpeg-tesseract", "screen_text", [])
+        high_ocr = result_from_text("第一行画面字幕\n第二行画面字幕", "ffmpeg-rapidocr", "screen_text", [])
+
+        self.assertEqual(screen_text_quality_score(low_ocr), 2)
+        self.assertEqual(select_best_local_auto_result(speech, low_ocr), speech)
+        self.assertEqual(select_best_local_auto_result(speech, high_ocr), high_ocr)
 
     def test_auto_local_media_returns_subtitle_track_without_combining(self) -> None:
         # Test objective:

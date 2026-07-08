@@ -138,7 +138,7 @@ API Server 不直接执行长耗时任务，只把任务写入队列。
 - 文字在画面上：用 FFmpeg 抽帧后优先交给 RapidOCR，未安装时回退 Tesseract；后续仍可接 PaddleOCR 或 VideoSubFinder。
 - 网络视频：先尝试授权范围内的字幕提取，再回退语音识别。
 
-MVP 实现 `auto`、`subtitle_track`、`speech`、`screen_text`、`network_captions` 五种偏好。缺少本地工具时不阻断项目，而是记录 warnings 并生成可编辑的回退文本。
+MVP 实现 `auto`、`subtitle_track`、`speech`、`screen_text`、`network_captions` 五种偏好。`auto` 内部可以运行多个候选提取器，但对外只返回质量最高的一个结果。缺少本地工具时不阻断项目，而是记录 warnings 并生成可编辑的回退文本。
 
 ### 3.4 Prompt Engine
 

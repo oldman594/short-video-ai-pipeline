@@ -1,5 +1,9 @@
 # RFD 0006: Auto Combines Speech and Burned-In Subtitle OCR
 
+Superseded for local media output selection by RFD 0009. Auto mode may still run
+both ASR and OCR internally, but it now returns one best transcript instead of a
+combined user-facing transcript.
+
 ## Context
 
 The `vision/` test video visually contains subtitles, but FFprobe reports no subtitle stream. This means the subtitles are burned into the video frames rather than stored as an embedded subtitle track.
