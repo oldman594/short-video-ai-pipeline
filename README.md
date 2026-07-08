@@ -143,6 +143,24 @@ python3 -m app.main
 
 外部服务需要接收 JSON 请求并返回 `output_video_url`，或返回 `output_base64` 和可选 `filename`，本项目会保存到 `data/outputs/`。
 
+直接接入 D-ID 数字人服务：
+
+```bash
+export AVATAR_VIDEO_PROVIDER="did"
+export DID_API_KEY="你的 D-ID API Key"
+export DID_SOURCE_URL="https://your-public-avatar-image.example/avatar.jpg"
+python3 -m app.main
+```
+
+`DID_SOURCE_URL` 必须是 D-ID 可以访问的公开头像图片 URL。可选语音配置：
+
+```bash
+export DID_VOICE_ID="zh-CN-XiaoxiaoNeural"
+export DID_VOICE_PROVIDER="microsoft"
+```
+
+不要把 `DID_API_KEY` 写入代码或提交到仓库。
+
 语音识别路径会在服务端执行：
 
 ```text

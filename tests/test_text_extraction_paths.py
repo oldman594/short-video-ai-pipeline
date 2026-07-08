@@ -11,6 +11,7 @@ from urllib.error import HTTPError, URLError
 from app.providers import (
     DeepSeekAnalysisProvider,
     DeepSeekProviderError,
+    DIDAvatarVideoProvider,
     ExternalHttpAvatarVideoProvider,
     AvatarVideoProviderError,
     MockASRProvider,
@@ -19,6 +20,7 @@ from app.providers import (
     SourceInput,
     default_avatar_video_provider,
     default_llm_provider,
+    did_authorization_header,
     extract_chat_message_content,
     normalize_analysis,
     parse_json_object,
@@ -248,6 +250,101 @@ class ProviderBranchTest(unittest.TestCase):
             clear=True,
         ):
             self.assertIsInstance(default_avatar_video_provider(), ExternalHttpAvatarVideoProvider)
+
+    def test_did_avatar_provider_covers_create_poll_auth_and_errors(self) -> None:
+        # Test objective:
+        # Verify the D-ID provider integration contract without calling the live D-ID
+        # API or spending render credits.
+        #
+        # Construction method:
+        # 1. Patch app.providers.urlopen with ordered fake D-ID create/get responses.
+        # 2. Render once through the provider and inspect the generated request.
+        # 3. Exercise failed D-ID status, missing configuration, and auth formatting.
+        #
+        # Input data:
+        # A fake D-ID API key, source image URL, script text, and synthetic talk
+        # creation/polling JSON responses.
+        #
+        # Expected behavior:
+        # The provider posts a text script to /talks, polls /talks/{id}, returns the
+        # completed result_url, maps failure statuses to AvatarVideoProviderError, and
+        # is selected by default only when required D-ID env vars are present.
+        class FakeResponse:
+            def __init__(self, body: bytes):
+                self.body = body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _tb):
+                return False
+
+            def read(self) -> bytes:
+                return self.body
+
+        requests = []
+
+        def fake_urlopen(request, timeout):
+            requests.append((request, timeout))
+            bodies = [
+                b'{"id":"talk-1","status":"created"}',
+                b'{"id":"talk-1","status":"started"}',
+                b'{"id":"talk-1","status":"done","result_url":"https://cdn.did/video.mp4"}',
+            ]
+            return FakeResponse(bodies[len(requests) - 1])
+
+        provider = DIDAvatarVideoProvider(
+            api_key="user@example.com:secret",
+            source_url="https://example.test/avatar.jpg",
+            base_url="https://api.d-id.test",
+            poll_interval_seconds=0,
+            max_polls=3,
+            voice_id="zh-CN-XiaoxiaoNeural",
+        )
+        with patch("app.providers.urlopen", side_effect=fake_urlopen):
+            result = provider.render(Path("/tmp/no-write"), "script-1", "口播脚本", ["标题"])
+
+        self.assertEqual(result["provider"], "d-id-avatar-video-v1")
+        self.assertEqual(result["output_video_url"], "https://cdn.did/video.mp4")
+        create_body = requests[0][0].data.decode("utf-8")
+        self.assertIn("https://example.test/avatar.jpg", create_body)
+        self.assertIn("zh-CN-XiaoxiaoNeural", create_body)
+        self.assertEqual(requests[0][0].get_method(), "POST")
+        self.assertEqual(requests[1][0].get_method(), "GET")
+        self.assertEqual(did_authorization_header("user@example.com:secret"), "Basic dXNlckBleGFtcGxlLmNvbTpzZWNyZXQ=")
+        self.assertEqual(did_authorization_header("Basic already"), "Basic already")
+
+        failed_provider = DIDAvatarVideoProvider(
+            api_key="key",
+            source_url="https://example.test/avatar.jpg",
+            base_url="https://api.d-id.test",
+            poll_interval_seconds=0,
+            max_polls=1,
+        )
+        with patch(
+            "app.providers.urlopen",
+            side_effect=[
+                FakeResponse(b'{"id":"talk-2"}'),
+                FakeResponse(b'{"id":"talk-2","status":"error","message":"bad source"}'),
+            ],
+        ):
+            with self.assertRaises(AvatarVideoProviderError):
+                failed_provider.render(Path("/tmp/no-write"), "script-2", "脚本", [])
+
+        with patch.dict(os.environ, {"AVATAR_VIDEO_PROVIDER": "did"}, clear=True):
+            with self.assertRaises(AvatarVideoProviderError):
+                default_avatar_video_provider()
+        with patch.dict(
+            os.environ,
+            {
+                "AVATAR_VIDEO_PROVIDER": "did",
+                "DID_API_KEY": "key",
+                "DID_SOURCE_URL": "https://example.test/avatar.jpg",
+                "DID_POLL_INTERVAL_SECONDS": "0",
+            },
+            clear=True,
+        ):
+            self.assertIsInstance(default_avatar_video_provider(), DIDAvatarVideoProvider)
 
     def test_deepseek_http_client_covers_success_and_error_mapping(self) -> None:
         # Test objective:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from textwrap import dedent
@@ -420,6 +421,23 @@ class ExternalHttpAvatarVideoProvider:
 
 def default_avatar_video_provider() -> MockAvatarVideoProvider | ExternalHttpAvatarVideoProvider:
     provider = os.environ.get("AVATAR_VIDEO_PROVIDER", "mock").strip().lower()
+    if provider in {"did", "d-id"}:
+        api_key = os.environ.get("DID_API_KEY")
+        source_url = os.environ.get("DID_SOURCE_URL")
+        if not api_key:
+            raise AvatarVideoProviderError("DID_API_KEY is required when AVATAR_VIDEO_PROVIDER=did.")
+        if not source_url:
+            raise AvatarVideoProviderError("DID_SOURCE_URL is required when AVATAR_VIDEO_PROVIDER=did.")
+        return DIDAvatarVideoProvider(
+            api_key=api_key,
+            source_url=source_url,
+            base_url=os.environ.get("DID_BASE_URL"),
+            timeout_seconds=int(os.environ.get("DID_HTTP_TIMEOUT_SECONDS", "60")),
+            poll_interval_seconds=float(os.environ.get("DID_POLL_INTERVAL_SECONDS", "3")),
+            max_polls=int(os.environ.get("DID_MAX_POLLS", "80")),
+            voice_id=os.environ.get("DID_VOICE_ID"),
+            voice_provider=os.environ.get("DID_VOICE_PROVIDER"),
+        )
     if provider in {"external-http", "http"}:
         endpoint = os.environ.get("AVATAR_VIDEO_ENDPOINT")
         if not endpoint:
@@ -431,6 +449,104 @@ def default_avatar_video_provider() -> MockAvatarVideoProvider | ExternalHttpAva
             timeout_seconds=timeout,
         )
     return MockAvatarVideoProvider()
+
+
+class DIDAvatarVideoProvider:
+    name = "d-id-avatar-video-v1"
+
+    def __init__(
+        self,
+        api_key: str,
+        source_url: str,
+        base_url: str | None = None,
+        timeout_seconds: int = 60,
+        poll_interval_seconds: float = 3.0,
+        max_polls: int = 80,
+        voice_id: str | None = None,
+        voice_provider: str | None = None,
+    ):
+        self.api_key = api_key
+        self.source_url = source_url
+        self.base_url = (base_url or "https://api.d-id.com").rstrip("/")
+        self.timeout_seconds = timeout_seconds
+        self.poll_interval_seconds = poll_interval_seconds
+        self.max_polls = max_polls
+        self.voice_id = voice_id
+        self.voice_provider = voice_provider or "microsoft"
+
+    def render(self, output_dir: Path, script_id: str, script_text: str, title_options: list[str]) -> dict:
+        create_response = self._request_json("POST", "/talks", self._talk_payload(script_text))
+        immediate_url = clean_string(create_response.get("result_url"))
+        if immediate_url:
+            return {"provider": self.name, "output_video_url": immediate_url}
+        talk_id = clean_string(create_response.get("id"))
+        if not talk_id:
+            raise AvatarVideoProviderError("D-ID create talk response did not include id or result_url.")
+        return self._poll_talk_result(talk_id)
+
+    def _talk_payload(self, script_text: str) -> dict:
+        script = {
+            "type": "text",
+            "input": script_text[:8000],
+        }
+        if self.voice_id:
+            script["provider"] = {
+                "type": self.voice_provider,
+                "voice_id": self.voice_id,
+            }
+        return {
+            "source_url": self.source_url,
+            "script": script,
+        }
+
+    def _poll_talk_result(self, talk_id: str) -> dict:
+        last_status = ""
+        for _attempt in range(self.max_polls):
+            response = self._request_json("GET", f"/talks/{talk_id}", None)
+            result_url = clean_string(response.get("result_url"))
+            status = clean_string(response.get("status")).lower()
+            if result_url:
+                return {"provider": self.name, "output_video_url": result_url}
+            if status in {"error", "failed", "rejected"}:
+                message = clean_string(response.get("error")) or clean_string(response.get("message")) or status
+                raise AvatarVideoProviderError(f"D-ID render failed: {message}")
+            last_status = status or last_status
+            time.sleep(self.poll_interval_seconds)
+        raise AvatarVideoProviderError(f"D-ID render timed out while waiting for talk {talk_id}; last status: {last_status}.")
+
+    def _request_json(self, method: str, path: str, payload: dict | None) -> dict:
+        data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        request = Request(
+            f"{self.base_url}{path}",
+            data=data,
+            method=method,
+            headers={
+                "Authorization": did_authorization_header(self.api_key),
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+        )
+        try:
+            with urlopen(request, timeout=self.timeout_seconds) as response:
+                parsed = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="ignore")[:500]
+            raise AvatarVideoProviderError(f"D-ID API returned HTTP {exc.code}: {detail}") from exc
+        except URLError as exc:
+            raise AvatarVideoProviderError(f"D-ID API request failed: {exc.reason}") from exc
+        except json.JSONDecodeError as exc:
+            raise AvatarVideoProviderError("D-ID API returned invalid JSON response.") from exc
+        if not isinstance(parsed, dict):
+            raise AvatarVideoProviderError("D-ID API response must be a JSON object.")
+        return parsed
+
+
+def did_authorization_header(api_key: str) -> str:
+    stripped = api_key.strip()
+    if stripped.lower().startswith(("basic ", "bearer ")):
+        return stripped
+    encoded = base64.b64encode(stripped.encode("utf-8")).decode("ascii")
+    return f"Basic {encoded}"
 
 
 def safe_output_video_filename(filename: str, script_id: str) -> str:

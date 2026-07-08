@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from app.config import OUTPUT_DIR
 from app.providers import (
     DeepSeekAnalysisProvider,
+    DIDAvatarVideoProvider,
     ExternalHttpAvatarVideoProvider,
     MockAvatarVideoProvider,
     MockLLMProvider,
@@ -22,7 +23,7 @@ class WorkflowService:
         repository: Repository,
         text_extractor: TextExtractionRouter | None = None,
         llm_provider: MockLLMProvider | DeepSeekAnalysisProvider | None = None,
-        avatar_provider: MockAvatarVideoProvider | ExternalHttpAvatarVideoProvider | None = None,
+        avatar_provider: MockAvatarVideoProvider | ExternalHttpAvatarVideoProvider | DIDAvatarVideoProvider | None = None,
     ):
         self.repository = repository
         self.text_extractor = text_extractor or TextExtractionRouter()
