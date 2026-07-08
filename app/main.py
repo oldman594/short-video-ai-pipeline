@@ -10,13 +10,14 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 from uuid import uuid4
 
-from app.config import DB_PATH, OUTPUT_DIR, STATIC_DIR, UPLOAD_DIR, ensure_directories
+from app.config import DB_PATH, OUTPUT_DIR, PHOTO_DIR, STATIC_DIR, UPLOAD_DIR, ensure_directories
 from app.storage import Repository
 from app.text_extraction import VALID_EXTRACTION_PREFERENCES, text_extraction_tool_status
 from app.workflow import BackgroundRunner, WorkflowService
 
 
 MAX_JSON_BODY_BYTES = 50 * 1024 * 1024
+ALLOWED_PHOTO_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 
 
 def create_app_state() -> tuple[Repository, WorkflowService, BackgroundRunner]:
@@ -60,6 +61,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._error(HTTPStatus.NOT_FOUND, "render job not found")
                 return
             self._json_response(job)
+        elif path.startswith("/photos/"):
+            self._serve_photo(path.removeprefix("/photos/"))
         elif path.startswith("/outputs/"):
             self._serve_output(path.removeprefix("/outputs/"))
         else:
@@ -234,6 +237,18 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._error(HTTPStatus.NOT_FOUND, "output file not found")
             return
         self._serve_file(path, download_name=safe_name)
+
+    def _serve_photo(self, filename: str) -> None:
+        safe_name = Path(unquote(filename)).name
+        path = (PHOTO_DIR / safe_name).resolve()
+        if (
+            not path.is_file()
+            or PHOTO_DIR.resolve() not in path.parents
+            or path.suffix.lower() not in ALLOWED_PHOTO_SUFFIXES
+        ):
+            self._error(HTTPStatus.NOT_FOUND, "photo file not found")
+            return
+        self._serve_file(path)
 
     def _serve_file(self, path: Path, download_name: str | None = None) -> None:
         content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"

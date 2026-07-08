@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import threading
 import unittest
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+import app.main as main_module
 from app.main import RequestHandler
 
 
@@ -107,6 +110,45 @@ class ApiValidationTest(unittest.TestCase):
         self.assertEqual(response.status, 201)
         self.assertEqual(body["source_type"], "link")
         self.assertTrue(body["source_file_path"])
+
+    def test_serves_public_photo_files_for_avatar_source_urls(self) -> None:
+        # Test objective:
+        # Verify that local avatar images can be exposed through a read-only HTTP
+        # route so D-ID can consume a public source_url when the server is deployed.
+        #
+        # Construction method:
+        # 1. Patch the app PHOTO_DIR to a temporary directory.
+        # 2. Start the standard RequestHandler on an ephemeral local port.
+        # 3. Request an allowed PNG file and a disallowed text file.
+        #
+        # Input data:
+        # A tiny fake PNG byte payload and a text file in the same directory.
+        #
+        # Expected behavior:
+        # The PNG is served with image content, while non-image files are rejected.
+        with tempfile.TemporaryDirectory() as tmp:
+            old_photo_dir = main_module.PHOTO_DIR
+            main_module.PHOTO_DIR = Path(tmp)
+            try:
+                (Path(tmp) / "avatar.png").write_bytes(b"\x89PNG\r\n")
+                (Path(tmp) / "secret.txt").write_text("secret", encoding="utf-8")
+                server = ThreadingHTTPServer(("127.0.0.1", 0), RequestHandler)
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                self.addCleanup(server.shutdown)
+                self.addCleanup(server.server_close)
+
+                response = urlopen(f"http://127.0.0.1:{server.server_port}/photos/avatar.png", timeout=5)
+                self.assertEqual(response.status, 200)
+                self.assertEqual(response.read(), b"\x89PNG\r\n")
+                response.close()
+
+                with self.assertRaises(HTTPError) as raised:
+                    urlopen(f"http://127.0.0.1:{server.server_port}/photos/secret.txt", timeout=5)
+                self.assertEqual(raised.exception.code, 404)
+                raised.exception.close()
+            finally:
+                main_module.PHOTO_DIR = old_photo_dir
 
 
 if __name__ == "__main__":

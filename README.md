@@ -152,7 +152,19 @@ export DID_SOURCE_URL="https://your-public-avatar-image.example/avatar.jpg"
 python3 -m app.main
 ```
 
-`DID_SOURCE_URL` 必须是 D-ID 可以访问的公开头像图片 URL。可选语音配置：
+`DID_SOURCE_URL` 必须是 D-ID 可以访问的公开头像图片 URL。也可以把头像图片放到 `photo/` 目录，并用公开服务地址自动生成 source URL：
+
+```bash
+export AVATAR_VIDEO_PROVIDER="did"
+export DID_API_KEY="你的 D-ID API Key"
+export PUBLIC_BASE_URL="https://your-public-domain.example"
+export DID_PHOTO_FILENAME="ScreenShot_2026-07-08_173136_011.png"
+python3 -m app.main
+```
+
+项目会通过 `/photos/<filename>` 只读暴露 `photo/` 中的图片。`PUBLIC_BASE_URL` 必须是公网可访问地址；本机 `127.0.0.1` 不能被 D-ID 云端访问。本地调试可以用内网穿透工具或部署到公网服务器。
+
+可选语音配置：
 
 ```bash
 export DID_VOICE_ID="zh-CN-XiaoxiaoNeural"

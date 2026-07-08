@@ -7,8 +7,11 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from textwrap import dedent
+from urllib.parse import quote
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+from app.config import PHOTO_DIR
 
 
 @dataclass(frozen=True)
@@ -419,15 +422,21 @@ class ExternalHttpAvatarVideoProvider:
         raise AvatarVideoProviderError("Avatar video service response did not include output_video_url or output_base64.")
 
 
-def default_avatar_video_provider() -> MockAvatarVideoProvider | ExternalHttpAvatarVideoProvider:
+def default_avatar_video_provider() -> MockAvatarVideoProvider | ExternalHttpAvatarVideoProvider | DIDAvatarVideoProvider:
     provider = os.environ.get("AVATAR_VIDEO_PROVIDER", "mock").strip().lower()
     if provider in {"did", "d-id"}:
         api_key = os.environ.get("DID_API_KEY")
-        source_url = os.environ.get("DID_SOURCE_URL")
+        source_url = os.environ.get("DID_SOURCE_URL") or did_source_url_from_local_photo(
+            os.environ.get("PUBLIC_BASE_URL") or os.environ.get("APP_PUBLIC_BASE_URL"),
+            os.environ.get("DID_PHOTO_FILENAME"),
+        )
         if not api_key:
             raise AvatarVideoProviderError("DID_API_KEY is required when AVATAR_VIDEO_PROVIDER=did.")
         if not source_url:
-            raise AvatarVideoProviderError("DID_SOURCE_URL is required when AVATAR_VIDEO_PROVIDER=did.")
+            raise AvatarVideoProviderError(
+                "DID_SOURCE_URL is required when AVATAR_VIDEO_PROVIDER=did, "
+                "or set PUBLIC_BASE_URL with a local photo/ image."
+            )
         return DIDAvatarVideoProvider(
             api_key=api_key,
             source_url=source_url,
@@ -547,6 +556,30 @@ def did_authorization_header(api_key: str) -> str:
         return stripped
     encoded = base64.b64encode(stripped.encode("utf-8")).decode("ascii")
     return f"Basic {encoded}"
+
+
+def did_source_url_from_local_photo(public_base_url: str | None, filename: str | None = None) -> str | None:
+    if not public_base_url:
+        return None
+    photo_path = local_avatar_photo_path(filename)
+    if photo_path is None:
+        return None
+    return f"{public_base_url.rstrip('/')}/photos/{quote(photo_path.name)}"
+
+
+def local_avatar_photo_path(filename: str | None = None) -> Path | None:
+    allowed_suffixes = {".jpg", ".jpeg", ".png", ".webp"}
+    if filename:
+        candidate = PHOTO_DIR / Path(filename).name
+        return candidate if candidate.is_file() and candidate.suffix.lower() in allowed_suffixes else None
+    if not PHOTO_DIR.is_dir():
+        return None
+    candidates = [
+        path
+        for path in sorted(PHOTO_DIR.iterdir())
+        if path.is_file() and path.suffix.lower() in allowed_suffixes
+    ]
+    return candidates[0] if candidates else None
 
 
 def safe_output_video_filename(filename: str, script_id: str) -> str:

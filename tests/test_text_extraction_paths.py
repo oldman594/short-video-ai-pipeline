@@ -21,7 +21,9 @@ from app.providers import (
     default_avatar_video_provider,
     default_llm_provider,
     did_authorization_header,
+    did_source_url_from_local_photo,
     extract_chat_message_content,
+    local_avatar_photo_path,
     normalize_analysis,
     parse_json_object,
     safe_output_video_filename,
@@ -345,6 +347,47 @@ class ProviderBranchTest(unittest.TestCase):
             clear=True,
         ):
             self.assertIsInstance(default_avatar_video_provider(), DIDAvatarVideoProvider)
+
+    def test_did_avatar_provider_can_derive_source_url_from_local_photo_folder(self) -> None:
+        # Test objective:
+        # Verify that D-ID can use a local photo/ avatar file through the project's
+        # public photo route instead of requiring DID_SOURCE_URL to be manually set.
+        #
+        # Construction method:
+        # 1. Patch app.providers.PHOTO_DIR to a temporary directory.
+        # 2. Create allowed image files and a disallowed non-image file.
+        # 3. Build the provider from environment variables with PUBLIC_BASE_URL only.
+        #
+        # Input data:
+        # A local avatar file with a space in the filename and PUBLIC_BASE_URL.
+        #
+        # Expected behavior:
+        # The helper selects image files only, URL-escapes the filename, and the
+        # default D-ID provider receives the derived public /photos URL.
+        with tempfile.TemporaryDirectory() as tmp:
+            photo_dir = Path(tmp)
+            (photo_dir / "avatar face.png").write_bytes(b"png")
+            (photo_dir / "notes.txt").write_text("ignore", encoding="utf-8")
+            with patch("app.providers.PHOTO_DIR", photo_dir):
+                self.assertEqual(local_avatar_photo_path("notes.txt"), None)
+                self.assertEqual(local_avatar_photo_path("avatar face.png"), photo_dir / "avatar face.png")
+                self.assertEqual(
+                    did_source_url_from_local_photo("https://public.example/base", "avatar face.png"),
+                    "https://public.example/base/photos/avatar%20face.png",
+                )
+                with patch.dict(
+                    os.environ,
+                    {
+                        "AVATAR_VIDEO_PROVIDER": "did",
+                        "DID_API_KEY": "key",
+                        "PUBLIC_BASE_URL": "https://public.example",
+                        "DID_PHOTO_FILENAME": "avatar face.png",
+                    },
+                    clear=True,
+                ):
+                    provider = default_avatar_video_provider()
+                    self.assertIsInstance(provider, DIDAvatarVideoProvider)
+                    self.assertEqual(provider.source_url, "https://public.example/photos/avatar%20face.png")
 
     def test_deepseek_http_client_covers_success_and_error_mapping(self) -> None:
         # Test objective:

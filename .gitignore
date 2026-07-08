@@ -9,6 +9,7 @@ venv/
 .local/
 .venv-whisper/
 .venv-ocr/
+photo/*
 data/app.db
 data/uploads/*
 data/outputs/*
