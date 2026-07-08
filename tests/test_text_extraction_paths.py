@@ -26,6 +26,8 @@ from app.text_extraction import (
     last_line,
     normalize_subtitle_text,
     parse_silencedetect,
+    rapidocr_python_config,
+    rapidocr_text_from_json,
     read_sidecar_subtitle,
     result_from_text,
     restore_punctuation,
@@ -113,6 +115,12 @@ class TextExtractionBranchTest(unittest.TestCase):
         self.assertEqual(format_srt_time(3661.234), "01:01:01,234")
         srt = format_srt([{"start": 0.0, "end": 1.2, "text": "你好。"}])
         self.assertIn("00:00:00,000 --> 00:00:01,200", srt)
+        rapid_text = rapidocr_text_from_json(
+            '{"items":[{"text":"咪在2.25万平方厘米醒的床","confidence":0.89},{"text":"x","confidence":0.9}]}'
+        )
+        self.assertIn("咪在2.25万平方厘米醒的床", rapid_text or "")
+        with self.assertRaises(ExtractionError):
+            rapidocr_text_from_json("not-json")
 
     def test_vad_parsing_and_segment_splitting_cover_timestamp_alignment_helpers(self) -> None:
         # Test objective:
@@ -235,11 +243,11 @@ class TextExtractionBranchTest(unittest.TestCase):
 
     def test_screen_text_paths_cover_success_missing_tools_and_errors(self) -> None:
         # Test objective:
-        # Cover OCR extraction branches for missing file, missing tools, success,
-        # empty OCR result, and helper exceptions.
+        # Cover OCR extraction branches for missing file, missing tools, RapidOCR
+        # success, Tesseract fallback success, empty OCR result, and helper exceptions.
         #
         # Construction method:
-        # Patch tool detection and OCR helper calls without invoking real Tesseract.
+        # Patch tool detection and OCR helper calls without invoking real OCR tools.
         #
         # Input data:
         # A fake media path and mocked OCR outcomes.
@@ -249,18 +257,34 @@ class TextExtractionBranchTest(unittest.TestCase):
         extractor = ScreenTextExtractor()
         self.assertIn("没有上传文件", extractor.extract(source()).warnings[0])
         media_source = source(source_file_path="/tmp/media.mp4")
-        with patch("app.text_extraction.shutil.which", return_value=None):
+        with patch("app.text_extraction.shutil.which", return_value=None), patch(
+            "app.text_extraction.rapidocr_python_config", return_value=None
+        ):
             missing = extractor.extract(media_source)
-            self.assertTrue(any("OCR" in item for item in missing.warnings))
+            self.assertTrue(any("FFmpeg" in item for item in missing.warnings))
+        with patch("app.text_extraction.shutil.which", return_value="/bin/ffmpeg"), patch(
+            "app.text_extraction.rapidocr_python_config",
+            return_value={"python": Path("/tmp/python"), "helper": Path("/tmp/helper.py")},
+        ), patch("app.text_extraction.extract_screen_text_with_rapidocr", return_value="硬字幕"):
+            self.assertEqual(extractor.extract(media_source).provider, "ffmpeg-rapidocr")
         with patch("app.text_extraction.shutil.which", return_value="/bin/tool"), patch(
+            "app.text_extraction.rapidocr_python_config", return_value=None
+        ), patch(
             "app.text_extraction.extract_screen_text_with_tesseract", return_value="画面字幕"
         ):
             self.assertEqual(extractor.extract(media_source).provider, "ffmpeg-tesseract")
         with patch("app.text_extraction.shutil.which", return_value="/bin/tool"), patch(
+            "app.text_extraction.rapidocr_python_config",
+            return_value={"python": Path("/tmp/python"), "helper": Path("/tmp/helper.py")},
+        ), patch("app.text_extraction.extract_screen_text_with_rapidocr", side_effect=ExtractionError("rapid failed")), patch(
             "app.text_extraction.extract_screen_text_with_tesseract", return_value=""
         ):
-            self.assertTrue(any("未识别" in item for item in extractor.extract(media_source).warnings))
+            warnings = extractor.extract(media_source).warnings
+            self.assertTrue(any("rapid failed" in item for item in warnings))
+            self.assertTrue(any("未识别" in item for item in warnings))
         with patch("app.text_extraction.shutil.which", return_value="/bin/tool"), patch(
+            "app.text_extraction.rapidocr_python_config", return_value=None
+        ), patch(
             "app.text_extraction.extract_screen_text_with_tesseract", side_effect=ExtractionError("ocr failed")
         ):
             self.assertTrue(any("ocr failed" in item for item in extractor.extract(media_source).warnings))
@@ -325,6 +349,8 @@ class TextExtractionBranchTest(unittest.TestCase):
         self.assertIn("tools", status)
         config = whisper_cpp_config()
         self.assertTrue(config is None or "cli" in config)
+        ocr_config = rapidocr_python_config()
+        self.assertTrue(ocr_config is None or "python" in ocr_config)
 
     def test_auto_local_media_combines_speech_and_screen_text_after_subtitle_fallback(self) -> None:
         # Test objective:

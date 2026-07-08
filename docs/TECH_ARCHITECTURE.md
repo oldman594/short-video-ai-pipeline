@@ -135,7 +135,7 @@ API Server 不直接执行长耗时任务，只把任务写入队列。
 
 - 有字幕轨：优先读取同名字幕文件，再用 FFmpeg / MKVToolNix 提取内嵌字幕轨。
 - 只有说话声音：用 Whisper 或云语音识别。
-- 文字在画面上：用 FFmpeg 抽帧后交给 Tesseract、PaddleOCR 或 VideoSubFinder。
+- 文字在画面上：用 FFmpeg 抽帧后优先交给 RapidOCR，未安装时回退 Tesseract；后续仍可接 PaddleOCR 或 VideoSubFinder。
 - 网络视频：先尝试授权范围内的字幕提取，再回退语音识别。
 
 MVP 实现 `auto`、`subtitle_track`、`speech`、`screen_text`、`network_captions` 五种偏好。缺少本地工具时不阻断项目，而是记录 warnings 并生成可编辑的回退文本。

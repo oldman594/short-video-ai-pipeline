@@ -13,7 +13,7 @@
 
 ## 本地运行
 
-当前 MVP 使用 Python 标准库实现，不需要安装第三方依赖。
+当前 MVP 的核心服务使用 Python 标准库实现；本地 ASR/OCR 工具按需安装。
 
 ```bash
 python3 -m app.main
@@ -41,6 +41,13 @@ python3 scripts/check_line_coverage.py
 
 ```bash
 python3 scripts/extract_text_local.py vision/61354d2054ca8878ffe02059f360e7fe.mp4 --mode auto
+```
+
+如果要评估画面硬字幕识别效果，请使用 `screen_text`，不要使用 `speech`：
+
+```bash
+bash scripts/bootstrap_ocr_local.sh
+python3 scripts/extract_text_local.py vision/61354d2054ca8878ffe02059f360e7fe.mp4 --mode screen_text --json
 ```
 
 ## MVP 已实现
@@ -86,10 +93,10 @@ python3 scripts/extract_text_local.py vision/61354d2054ca8878ffe02059f360e7fe.mp
 
 创建项目时可以选择：
 
-- `自动判断`：链接先尝试网络字幕，本地上传先尝试字幕轨，失败后回退语音识别。
+- `自动判断`：本地上传先尝试字幕轨；如果没有独立字幕轨，同时运行语音识别和画面硬字幕 OCR。
 - `有字幕轨`：优先读取同名 `.srt` / `.vtt` / `.ass` 文件，其次尝试 FFmpeg 内嵌字幕轨。
-- `只有说话声音`：优先使用 Whisper CLI，后续可替换为云语音识别。
-- `文字在画面上`：预留 FFmpeg 抽帧 + Tesseract OCR，后续可接 PaddleOCR 或 VideoSubFinder。
+- `只有说话声音`：使用 Whisper / whisper.cpp，后续可替换为云语音识别。
+- `文字在画面上`：优先使用 FFmpeg 抽帧 + RapidOCR；未安装 RapidOCR 时回退 Tesseract OCR。
 - `网络视频`：预留 yt-dlp 字幕提取，默认关闭网络抓取并保留合规提示。
 
 服务端工具状态可以在页面左侧查看，也可以请求：
@@ -102,6 +109,12 @@ GET /api/system/text-extraction-tools
 
 ```bash
 bash scripts/install_text_tools.sh
+```
+
+安装本地硬字幕 OCR 增强环境：
+
+```bash
+bash scripts/bootstrap_ocr_local.sh
 ```
 
 语音识别路径会在服务端执行：

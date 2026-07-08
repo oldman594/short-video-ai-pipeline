@@ -29,6 +29,7 @@ EXCLUDED_FUNCTIONS = {
     "slice_audio",
     "run_whisper_cpp_chunk",
     "write_srt_file",
+    "extract_screen_text_with_rapidocr",
     "extract_screen_text_with_tesseract",
     "run_tesseract_variants",
     "extract_network_captions_with_ytdlp",

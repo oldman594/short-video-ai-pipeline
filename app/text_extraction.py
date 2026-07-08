@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -200,8 +201,28 @@ class ScreenTextExtractor(BaseExtractor):
         if not source.source_file_path:
             return self.fallback(source, ["没有上传文件，无法对画面文字做 OCR。"])
 
-        tesseract = shutil.which("tesseract")
         ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            return self.fallback(source, ["未安装 FFmpeg，无法抽帧给 OCR 使用。"])
+
+        rapidocr = rapidocr_python_config()
+        if rapidocr:
+            try:
+                text = extract_screen_text_with_rapidocr(ffmpeg, rapidocr, Path(source.source_file_path))
+                if text:
+                    return result_from_text(
+                        text,
+                        provider="ffmpeg-rapidocr",
+                        extraction_method=self.method,
+                        warnings=[],
+                    )
+                warnings.append("RapidOCR 未识别到可用画面文字。")
+            except ExtractionError as exc:
+                warnings.append(str(exc))
+        else:
+            warnings.append("未找到 RapidOCR 本地环境，继续尝试 Tesseract OCR。")
+
+        tesseract = shutil.which("tesseract")
         if tesseract and ffmpeg:
             try:
                 text = extract_screen_text_with_tesseract(ffmpeg, tesseract, Path(source.source_file_path))
@@ -216,11 +237,9 @@ class ScreenTextExtractor(BaseExtractor):
             except ExtractionError as exc:
                 warnings.append(str(exc))
         else:
-            if not ffmpeg:
-                warnings.append("未安装 FFmpeg，无法抽帧给 OCR 使用。")
             if not tesseract:
                 warnings.append("未安装 Tesseract，无法识别画面文字。")
-            warnings.append("如需更好的中文字幕 OCR，可接入 PaddleOCR 或 VideoSubFinder。")
+            warnings.append("如需更好的中文字幕 OCR，可安装 RapidOCR、PaddleOCR 或 VideoSubFinder。")
 
         return self.fallback(source, warnings)
 
@@ -388,6 +407,16 @@ def text_extraction_tool_status() -> dict:
             "install_hint": "安装 whisper.cpp，并运行 scripts/bootstrap_whispercpp_local.sh 下载 tiny 模型。",
         }
     )
+    rapidocr = rapidocr_python_config()
+    tools.append(
+        {
+            "name": "rapidocr",
+            "available": rapidocr is not None,
+            "path": str(rapidocr["python"]) if rapidocr else None,
+            "purpose": "RapidOCR 本地画面硬字幕识别。",
+            "install_hint": "运行 scripts/bootstrap_ocr_local.sh 创建 .venv-ocr 并安装 rapidocr_onnxruntime。",
+        }
+    )
     return {
         "tools": tools,
         "network_fetch_enabled": os.environ.get("ALLOW_NETWORK_MEDIA_FETCH") == "1",
@@ -482,6 +511,21 @@ def whisper_cpp_config() -> dict | None:
     lib_dir = ROOT_DIR / ".local" / "whispercpp" / "usr" / "lib" / "x86_64-linux-gnu"
     if cli.is_file() and model.is_file() and lib_dir.is_dir():
         return {"cli": cli, "lib_dir": lib_dir, "model": model}
+    return None
+
+
+def rapidocr_python_config() -> dict | None:
+    helper = ROOT_DIR / "scripts" / "rapidocr_screen_text.py"
+    if not helper.is_file():
+        return None
+    candidates = []
+    env_python = os.environ.get("RAPIDOCR_PYTHON")
+    if env_python:
+        candidates.append(Path(env_python))
+    candidates.append(ROOT_DIR / ".venv-ocr" / "bin" / "python")
+    for python in candidates:
+        if python.is_file():
+            return {"python": python, "helper": helper}
     return None
 
 
@@ -772,6 +816,61 @@ def extract_screen_text_with_tesseract(ffmpeg: str, tesseract: str, video_path: 
         for frame in sorted(Path(tmp).glob("subtitle-*.png")):
             texts.extend(run_tesseract_variants(tesseract, frame))
         return filter_ocr_text("\n".join(texts))
+
+
+def extract_screen_text_with_rapidocr(ffmpeg: str, config: dict, video_path: Path) -> str | None:
+    with tempfile.TemporaryDirectory() as tmp:
+        frame_pattern = str(Path(tmp) / "subtitle-%03d.png")
+        proc = subprocess.run(
+            [
+                ffmpeg,
+                "-y",
+                "-i",
+                str(video_path),
+                "-vf",
+                "fps=1,crop=iw*0.88:ih*0.16:iw*0.06:ih*0.64,"
+                "scale=iw*3:ih*3,format=gray,eq=contrast=2.2:brightness=0.02,"
+                "unsharp=5:5:1.2",
+                "-frames:v",
+                "45",
+                frame_pattern,
+            ],
+            text=True,
+            capture_output=True,
+            timeout=180,
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise ExtractionError(f"FFmpeg 抽帧失败：{last_line(proc.stderr)}")
+        frames = sorted(Path(tmp).glob("subtitle-*.png"))
+        if not frames:
+            return None
+        ocr = subprocess.run(
+            [
+                str(config["python"]),
+                str(config["helper"]),
+                "--json",
+                "--min-confidence",
+                "0.55",
+                *[str(frame) for frame in frames],
+            ],
+            text=True,
+            capture_output=True,
+            timeout=240,
+            check=False,
+        )
+        if ocr.returncode != 0:
+            raise ExtractionError(f"RapidOCR 识别失败：{last_line(ocr.stderr)}")
+        return rapidocr_text_from_json(ocr.stdout)
+
+
+def rapidocr_text_from_json(output: str) -> str | None:
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise ExtractionError("RapidOCR 没有返回有效 JSON。") from exc
+    texts = [item.get("text", "") for item in payload.get("items", []) if isinstance(item, dict)]
+    return filter_ocr_text("\n".join(texts))
 
 
 def run_tesseract_variants(tesseract: str, frame: Path) -> list[str]:
