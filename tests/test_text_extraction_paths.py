@@ -3,10 +3,23 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
+from urllib.error import HTTPError, URLError
 
-from app.providers import MockASRProvider, MockAvatarVideoProvider, MockLLMProvider, SourceInput
+from app.providers import (
+    DeepSeekAnalysisProvider,
+    DeepSeekProviderError,
+    MockASRProvider,
+    MockAvatarVideoProvider,
+    MockLLMProvider,
+    SourceInput,
+    default_llm_provider,
+    extract_chat_message_content,
+    normalize_analysis,
+    parse_json_object,
+)
 from app.text_extraction import (
     BaseExtractor,
     ExtractionError,
@@ -83,6 +96,127 @@ class ProviderBranchTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             result = MockAvatarVideoProvider().render(Path(tmp), "script-1", "脚本", [])
             self.assertTrue((Path(tmp) / result["output_filename"]).is_file())
+
+    def test_deepseek_analysis_provider_normalizes_structured_response_without_live_api(self) -> None:
+        # Test objective:
+        # Verify that the DeepSeek adapter can turn an OpenAI-compatible chat
+        # completion response into the analysis shape expected by storage/workflow.
+        #
+        # Construction method:
+        # 1. Subclass the provider to return a deterministic fake chat response.
+        # 2. Call analyze and generate_scripts without making any network request.
+        # 3. Exercise helper error paths for malformed response/content.
+        #
+        # Input data:
+        # A transcript, title, and fake DeepSeek JSON content.
+        #
+        # Expected behavior:
+        # The provider returns normalized analysis with provider metadata, delegates
+        # script generation to the mock script provider, and raises clear errors for
+        # invalid DeepSeek response shapes.
+        class FakeDeepSeek(DeepSeekAnalysisProvider):
+            def _post_chat_completion(self, payload: dict) -> dict:
+                self.last_payload = payload
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": (
+                                    '{"topic":"学习方法","audience":"大学生","category":"知识口播",'
+                                    '"hook":"反常识开场","structure":[{"step":"hook","summary":"先抛问题"}],'
+                                    '"key_points":["保留结构，不复用原句"],"risks":["避免逐句搬运"]}'
+                                )
+                            }
+                        }
+                    ]
+                }
+
+        provider = FakeDeepSeek(api_key="test-key", base_url="https://example.test", timeout_seconds=1)
+        analysis = provider.analyze("期末复习要先抓重点", title="学习技巧", platform="douyin")
+        self.assertEqual(analysis["provider"], "deepseek-analysis-v1")
+        self.assertEqual(analysis["topic"], "学习方法")
+        self.assertEqual(analysis["structure"][0]["step"], "hook")
+        self.assertIn("json_object", str(provider.last_payload["response_format"]))
+        self.assertEqual(len(provider.generate_scripts("text", analysis, "学习技巧")), 3)
+
+        with self.assertRaises(DeepSeekProviderError):
+            extract_chat_message_content({"choices": []})
+        with self.assertRaises(DeepSeekProviderError):
+            parse_json_object("not-json")
+
+        normalized = normalize_analysis({"structure": ["直接指出痛点"], "key_points": [123, "改写表达"]}, "", "文本", "p")
+        self.assertEqual(normalized["structure"][0]["summary"], "直接指出痛点")
+        self.assertEqual(normalized["key_points"], ["改写表达"])
+
+    def test_default_llm_provider_selects_deepseek_only_when_api_key_exists(self) -> None:
+        # Test objective:
+        # Verify that DeepSeek is opt-in through environment configuration so tests and
+        # local MVP runs do not accidentally call a paid third-party API.
+        #
+        # Construction method:
+        # Patch the process environment with and without DEEPSEEK_API_KEY.
+        #
+        # Input data:
+        # Empty environment and one environment containing a placeholder API key.
+        #
+        # Expected behavior:
+        # The default provider is mock without a key and DeepSeekAnalysisProvider with
+        # a key; no live request is made by construction.
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertIsInstance(default_llm_provider(), MockLLMProvider)
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "placeholder"}, clear=True):
+            self.assertIsInstance(default_llm_provider(), DeepSeekAnalysisProvider)
+
+    def test_deepseek_http_client_covers_success_and_error_mapping(self) -> None:
+        # Test objective:
+        # Cover the DeepSeek HTTP client success path and its local error mapping
+        # without sending a live network request or using a real API key.
+        #
+        # Construction method:
+        # 1. Patch app.providers.urlopen with a fake context-manager response.
+        # 2. Patch it again to raise HTTPError, URLError, and invalid JSON responses.
+        # 3. Exercise helper validation for empty content and non-object JSON.
+        #
+        # Input data:
+        # A minimal chat completion payload and synthetic urllib responses/errors.
+        #
+        # Expected behavior:
+        # Successful responses decode to dictionaries, external failures become
+        # DeepSeekProviderError, and malformed model content is rejected.
+        class FakeResponse:
+            def __init__(self, body: bytes):
+                self.body = body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _tb):
+                return False
+
+            def read(self) -> bytes:
+                return self.body
+
+        provider = DeepSeekAnalysisProvider(api_key="test-key", base_url="https://example.test", timeout_seconds=1)
+        with patch("app.providers.urlopen", return_value=FakeResponse(b'{"choices":[]}')):
+            self.assertEqual(provider._post_chat_completion({"messages": []}), {"choices": []})
+
+        http_error = HTTPError("https://example.test", 401, "unauthorized", {}, BytesIO(b"bad key"))
+        with patch("app.providers.urlopen", side_effect=http_error):
+            with self.assertRaises(DeepSeekProviderError):
+                provider._post_chat_completion({"messages": []})
+        http_error.close()
+        with patch("app.providers.urlopen", side_effect=URLError("offline")):
+            with self.assertRaises(DeepSeekProviderError):
+                provider._post_chat_completion({"messages": []})
+        with patch("app.providers.urlopen", return_value=FakeResponse(b"not-json")):
+            with self.assertRaises(DeepSeekProviderError):
+                provider._post_chat_completion({"messages": []})
+
+        with self.assertRaises(DeepSeekProviderError):
+            extract_chat_message_content({"choices": [{"message": {"content": ""}}]})
+        with self.assertRaises(DeepSeekProviderError):
+            parse_json_object("[]")
+        self.assertEqual(normalize_analysis({"structure": "bad"}, "标题", "文本", "p")["provider"], "p")
 
 
 class TextExtractionBranchTest(unittest.TestCase):

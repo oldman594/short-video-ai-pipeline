@@ -37,6 +37,20 @@ python3 -m unittest discover -s tests
 python3 scripts/check_line_coverage.py
 ```
 
+启用 DeepSeek 做结构分析：
+
+```bash
+export DEEPSEEK_API_KEY="你的 DeepSeek API Key"
+python3 -m app.main
+```
+
+可选配置：
+
+```bash
+export DEEPSEEK_MODEL="deepseek-v4-flash"
+export DEEPSEEK_BASE_URL="https://api.deepseek.com"
+```
+
 直接验证某个本地视频的文本提取：
 
 ```bash
@@ -83,7 +97,7 @@ python3 scripts/extract_text_local.py vision/61354d2054ca8878ffe02059f360e7fe.mp
 ## 当前限制
 
 - 文本提取路由已经存在，但本机未安装 FFmpeg、Whisper、Tesseract、yt-dlp 等工具时会使用回退文本。
-- LLM 和数字人渲染是 mock provider，不调用真实第三方服务。
+- 未配置 `DEEPSEEK_API_KEY` 时 LLM 使用 mock provider；配置后结构分析调用 DeepSeek，数字人渲染仍是 mock provider。
 - 链接导入默认只记录链接，不下载外部平台视频；如果要从抖音等平台内容提取文本，请先在客户端合法保存视频，再作为本地文件附带上传给服务端。
 - 网络字幕抓取需要显式设置 `ALLOW_NETWORK_MEDIA_FETCH=1`，且 MVP 不抓取抖音链接。
 - 上传文件使用浏览器 base64 JSON 上传，适合 MVP 验证，不适合大文件生产使用。

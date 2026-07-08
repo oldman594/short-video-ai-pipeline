@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from textwrap import dedent
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 
 @dataclass(frozen=True)
@@ -130,6 +134,174 @@ class MockLLMProvider:
     def _derive_topic(transcript: str) -> str:
         compact = transcript.strip().replace("\n", "")
         return compact[:16] or "参考视频"
+
+
+class DeepSeekProviderError(RuntimeError):
+    pass
+
+
+class DeepSeekAnalysisProvider:
+    name = "deepseek-analysis-v1"
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str | None = None,
+        base_url: str | None = None,
+        timeout_seconds: int = 60,
+        script_provider: MockLLMProvider | None = None,
+    ):
+        self.api_key = api_key
+        self.model = model or os.environ.get("DEEPSEEK_MODEL") or "deepseek-v4-flash"
+        self.base_url = (base_url or os.environ.get("DEEPSEEK_BASE_URL") or "https://api.deepseek.com").rstrip("/")
+        self.timeout_seconds = timeout_seconds
+        self.script_provider = script_provider or MockLLMProvider()
+
+    def analyze(self, transcript: str, title: str, platform: str) -> dict:
+        payload = self._chat_completion_payload(transcript, title, platform)
+        response = self._post_chat_completion(payload)
+        content = extract_chat_message_content(response)
+        analysis = parse_json_object(content)
+        return normalize_analysis(analysis, title, transcript, self.name)
+
+    def generate_scripts(self, transcript: str, analysis: dict, title: str) -> list[dict]:
+        return self.script_provider.generate_scripts(transcript, analysis, title)
+
+    def _chat_completion_payload(self, transcript: str, title: str, platform: str) -> dict:
+        system_prompt = dedent(
+            """
+            你是短视频内容结构分析师。请只输出 json 对象，不要输出 markdown。
+            目标是分析参考视频的选题、受众、开场钩子、叙事结构、可迁移要点和风险。
+            不能逐句复刻原文，不能建议克隆原作者身份、声音、脸或独特口头禅。
+
+            json schema:
+            {
+              "topic": "主题",
+              "audience": "目标受众",
+              "category": "内容类型",
+              "hook": "开场钩子总结",
+              "structure": [{"step": "hook", "summary": "这一段承担的作用"}],
+              "key_points": ["可迁移的原创表达要点"],
+              "risks": ["合规、事实或相似度风险"]
+            }
+            """
+        ).strip()
+        user_prompt = dedent(
+            f"""
+            请基于下面信息输出 json 结构分析。
+
+            标题：{title or "未填写"}
+            平台：{platform or "unknown"}
+            转写文本：
+            {transcript[:6000]}
+            """
+        ).strip()
+        return {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "response_format": {"type": "json_object"},
+            "thinking": {"type": "disabled"},
+            "temperature": 0.2,
+            "max_tokens": 1800,
+        }
+
+    def _post_chat_completion(self, payload: dict) -> dict:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        request = Request(
+            f"{self.base_url}/chat/completions",
+            data=body,
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+        )
+        try:
+            with urlopen(request, timeout=self.timeout_seconds) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="ignore")[:500]
+            raise DeepSeekProviderError(f"DeepSeek API returned HTTP {exc.code}: {detail}") from exc
+        except URLError as exc:
+            raise DeepSeekProviderError(f"DeepSeek API request failed: {exc.reason}") from exc
+        except json.JSONDecodeError as exc:
+            raise DeepSeekProviderError("DeepSeek API returned invalid JSON response.") from exc
+
+
+def default_llm_provider() -> MockLLMProvider | DeepSeekAnalysisProvider:
+    api_key = os.environ.get("DEEPSEEK_API_KEY")
+    if api_key:
+        return DeepSeekAnalysisProvider(api_key=api_key)
+    return MockLLMProvider()
+
+
+def extract_chat_message_content(response: dict) -> str:
+    try:
+        content = response["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise DeepSeekProviderError("DeepSeek API response did not include message content.") from exc
+    if not isinstance(content, str) or not content.strip():
+        raise DeepSeekProviderError("DeepSeek API returned empty analysis content.")
+    return content
+
+
+def parse_json_object(content: str) -> dict:
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise DeepSeekProviderError("DeepSeek analysis content was not valid JSON.") from exc
+    if not isinstance(parsed, dict):
+        raise DeepSeekProviderError("DeepSeek analysis JSON must be an object.")
+    return parsed
+
+
+def normalize_analysis(analysis: dict, title: str, transcript: str, provider: str) -> dict:
+    fallback = MockLLMProvider().analyze(transcript, title, "unknown")
+    structure = normalize_structure_list(analysis.get("structure"))
+    key_points = normalize_string_list(analysis.get("key_points"))
+    risks = normalize_string_list(analysis.get("risks"))
+    return {
+        "topic": clean_string(analysis.get("topic")) or fallback["topic"],
+        "audience": clean_string(analysis.get("audience")) or fallback["audience"],
+        "category": clean_string(analysis.get("category")) or fallback["category"],
+        "hook": clean_string(analysis.get("hook")) or fallback["hook"],
+        "structure": structure or fallback["structure"],
+        "key_points": key_points or fallback["key_points"],
+        "risks": risks or fallback["risks"],
+        "provider": provider,
+    }
+
+
+def normalize_structure_list(value: object) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    normalized = []
+    for item in value:
+        if isinstance(item, dict):
+            step = clean_string(item.get("step")) or f"step-{len(normalized) + 1}"
+            summary = clean_string(item.get("summary"))
+        else:
+            step = f"step-{len(normalized) + 1}"
+            summary = clean_string(item)
+        if summary:
+            normalized.append({"step": step, "summary": summary})
+    return normalized[:8]
+
+
+def normalize_string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    items = [clean_string(item) for item in value]
+    return [item for item in items if item][:10]
+
+
+def clean_string(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    return " ".join(value.split()).strip()
 
 
 class MockAvatarVideoProvider:

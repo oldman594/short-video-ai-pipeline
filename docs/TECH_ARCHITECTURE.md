@@ -370,6 +370,8 @@ GET /api/render-jobs/{render_job_id}
 
 LLM 输出尽量使用 JSON schema，避免自由文本难以解析。
 
+MVP 当前在 `DEEPSEEK_API_KEY` 存在时使用 DeepSeek 的 OpenAI-compatible Chat Completions 接口执行内容结构分析；未配置 key 时回退到 mock LLM provider。脚本生成仍可沿用 mock provider，后续再替换为真实 LLM 生成。
+
 内容分析输出示例：
 
 ```json

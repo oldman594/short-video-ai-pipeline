@@ -3,7 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 
 from app.config import OUTPUT_DIR
-from app.providers import MockAvatarVideoProvider, MockLLMProvider, SourceInput
+from app.providers import DeepSeekAnalysisProvider, MockAvatarVideoProvider, MockLLMProvider, SourceInput, default_llm_provider
 from app.storage import Repository
 from app.text_extraction import TextExtractionRouter
 
@@ -13,12 +13,12 @@ class WorkflowService:
         self,
         repository: Repository,
         text_extractor: TextExtractionRouter | None = None,
-        llm_provider: MockLLMProvider | None = None,
+        llm_provider: MockLLMProvider | DeepSeekAnalysisProvider | None = None,
         avatar_provider: MockAvatarVideoProvider | None = None,
     ):
         self.repository = repository
         self.text_extractor = text_extractor or TextExtractionRouter()
-        self.llm_provider = llm_provider or MockLLMProvider()
+        self.llm_provider = llm_provider or default_llm_provider()
         self.avatar_provider = avatar_provider or MockAvatarVideoProvider()
 
     def process_project(self, project_id: str) -> None:
