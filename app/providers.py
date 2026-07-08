@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 from dataclasses import dataclass
@@ -335,3 +336,112 @@ class MockAvatarVideoProvider:
             "output_filename": filename,
             "output_video_url": f"/outputs/{filename}",
         }
+
+
+class AvatarVideoProviderError(RuntimeError):
+    pass
+
+
+class ExternalHttpAvatarVideoProvider:
+    name = "external-http-avatar-video-dev"
+
+    def __init__(
+        self,
+        endpoint: str,
+        api_key: str | None = None,
+        timeout_seconds: int = 300,
+    ):
+        self.endpoint = endpoint
+        self.api_key = api_key
+        self.timeout_seconds = timeout_seconds
+
+    def render(self, output_dir: Path, script_id: str, script_text: str, title_options: list[str]) -> dict:
+        title = title_options[0] if title_options else "短视频草稿"
+        payload = {
+            "script_id": script_id,
+            "script_text": script_text,
+            "title": title,
+            "title_options": title_options,
+            "output_format": "mp4",
+            "provider_contract": "short-video-ai-pipeline.avatar.render.v1",
+            "development_status": "in_development",
+        }
+        response = self._post_render(payload)
+        return self._normalize_render_response(response, output_dir, script_id)
+
+    def _post_render(self, payload: dict) -> dict:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        request = Request(self.endpoint, data=body, method="POST", headers=headers)
+        try:
+            with urlopen(request, timeout=self.timeout_seconds) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="ignore")[:500]
+            raise AvatarVideoProviderError(f"Avatar video service returned HTTP {exc.code}: {detail}") from exc
+        except URLError as exc:
+            raise AvatarVideoProviderError(f"Avatar video service request failed: {exc.reason}") from exc
+        except json.JSONDecodeError as exc:
+            raise AvatarVideoProviderError("Avatar video service returned invalid JSON response.") from exc
+
+    def _normalize_render_response(self, response: dict, output_dir: Path, script_id: str) -> dict:
+        if not isinstance(response, dict):
+            raise AvatarVideoProviderError("Avatar video service response must be a JSON object.")
+        output_url = clean_string(
+            response.get("output_video_url")
+            or response.get("output_url")
+            or response.get("video_url")
+        )
+        if output_url:
+            return {"provider": self.name, "output_video_url": output_url}
+
+        output_base64 = response.get("output_base64") or response.get("video_base64")
+        if isinstance(output_base64, str) and output_base64.strip():
+            filename = safe_output_video_filename(
+                clean_string(response.get("filename")) or f"render-{script_id}.mp4",
+                script_id,
+            )
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_path = output_dir / filename
+            try:
+                output_path.write_bytes(base64.b64decode(strip_data_url_prefix(output_base64), validate=True))
+            except ValueError as exc:
+                raise AvatarVideoProviderError("Avatar video service returned invalid base64 video data.") from exc
+            return {
+                "provider": self.name,
+                "output_filename": filename,
+                "output_video_url": f"/outputs/{filename}",
+            }
+
+        raise AvatarVideoProviderError("Avatar video service response did not include output_video_url or output_base64.")
+
+
+def default_avatar_video_provider() -> MockAvatarVideoProvider | ExternalHttpAvatarVideoProvider:
+    provider = os.environ.get("AVATAR_VIDEO_PROVIDER", "mock").strip().lower()
+    if provider in {"external-http", "http"}:
+        endpoint = os.environ.get("AVATAR_VIDEO_ENDPOINT")
+        if not endpoint:
+            raise AvatarVideoProviderError("AVATAR_VIDEO_ENDPOINT is required when AVATAR_VIDEO_PROVIDER=external-http.")
+        timeout = int(os.environ.get("AVATAR_VIDEO_TIMEOUT_SECONDS", "300"))
+        return ExternalHttpAvatarVideoProvider(
+            endpoint=endpoint,
+            api_key=os.environ.get("AVATAR_VIDEO_API_KEY"),
+            timeout_seconds=timeout,
+        )
+    return MockAvatarVideoProvider()
+
+
+def safe_output_video_filename(filename: str, script_id: str) -> str:
+    cleaned = "".join(char if char.isalnum() or char in "._-" else "-" for char in filename).strip(".-")
+    if not cleaned:
+        cleaned = f"render-{script_id}.mp4"
+    suffix = Path(cleaned).suffix.lower()
+    if suffix not in {".mp4", ".mov", ".webm", ".mkv"}:
+        cleaned = f"{Path(cleaned).stem or f'render-{script_id}'}.mp4"
+    return cleaned
+
+
+def strip_data_url_prefix(value: str) -> str:
+    return value.split(",", 1)[1] if "," in value and value.lstrip().startswith("data:") else value

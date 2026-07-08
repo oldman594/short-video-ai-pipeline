@@ -11,14 +11,19 @@ from urllib.error import HTTPError, URLError
 from app.providers import (
     DeepSeekAnalysisProvider,
     DeepSeekProviderError,
+    ExternalHttpAvatarVideoProvider,
+    AvatarVideoProviderError,
     MockASRProvider,
     MockAvatarVideoProvider,
     MockLLMProvider,
     SourceInput,
+    default_avatar_video_provider,
     default_llm_provider,
     extract_chat_message_content,
     normalize_analysis,
     parse_json_object,
+    safe_output_video_filename,
+    strip_data_url_prefix,
 )
 from app.text_extraction import (
     BaseExtractor,
@@ -166,6 +171,83 @@ class ProviderBranchTest(unittest.TestCase):
             self.assertIsInstance(default_llm_provider(), MockLLMProvider)
         with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "placeholder"}, clear=True):
             self.assertIsInstance(default_llm_provider(), DeepSeekAnalysisProvider)
+
+    def test_external_avatar_provider_covers_url_base64_and_error_paths(self) -> None:
+        # Test objective:
+        # Verify the real avatar-video service adapter contract without calling an
+        # external provider or requiring paid credentials.
+        #
+        # Construction method:
+        # 1. Patch app.providers.urlopen with fake JSON responses.
+        # 2. Exercise both URL-return and base64-return response contracts.
+        # 3. Exercise configuration and response validation errors.
+        #
+        # Input data:
+        # Synthetic script text, title options, and fake avatar service responses.
+        #
+        # Expected behavior:
+        # The adapter returns remote URLs directly, stores base64 video bytes under
+        # the output directory, maps failures to AvatarVideoProviderError, and is only
+        # selected by default when the external-http environment is configured.
+        class FakeResponse:
+            def __init__(self, body: bytes):
+                self.body = body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _tb):
+                return False
+
+            def read(self) -> bytes:
+                return self.body
+
+        provider = ExternalHttpAvatarVideoProvider("https://avatar.example/render", api_key="secret", timeout_seconds=1)
+        with patch("app.providers.urlopen", return_value=FakeResponse(b'{"output_video_url":"https://cdn.example/video.mp4"}')):
+            remote = provider.render(Path("/tmp/no-write"), "script-1", "脚本", ["标题"])
+        self.assertEqual(remote["output_video_url"], "https://cdn.example/video.mp4")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch(
+                "app.providers.urlopen",
+                return_value=FakeResponse(b'{"filename":"demo video.mp4","output_base64":"ZHVtbXk="}'),
+            ):
+                local = provider.render(Path(tmp), "script-2", "脚本", [])
+            self.assertTrue((Path(tmp) / local["output_filename"]).is_file())
+            self.assertEqual((Path(tmp) / local["output_filename"]).read_bytes(), b"dummy")
+
+        with patch("app.providers.urlopen", return_value=FakeResponse(b"{}")):
+            with self.assertRaises(AvatarVideoProviderError):
+                provider.render(Path("/tmp/no-write"), "script-3", "脚本", [])
+        with patch("app.providers.urlopen", return_value=FakeResponse(b'{"output_base64":"not-base64"}')):
+            with self.assertRaises(AvatarVideoProviderError):
+                provider.render(Path("/tmp/no-write"), "script-4", "脚本", [])
+
+        http_error = HTTPError("https://avatar.example", 500, "server error", {}, BytesIO(b"failed"))
+        with patch("app.providers.urlopen", side_effect=http_error):
+            with self.assertRaises(AvatarVideoProviderError):
+                provider.render(Path("/tmp/no-write"), "script-5", "脚本", [])
+        http_error.close()
+        with patch("app.providers.urlopen", side_effect=URLError("offline")):
+            with self.assertRaises(AvatarVideoProviderError):
+                provider.render(Path("/tmp/no-write"), "script-6", "脚本", [])
+        with patch("app.providers.urlopen", return_value=FakeResponse(b"not-json")):
+            with self.assertRaises(AvatarVideoProviderError):
+                provider.render(Path("/tmp/no-write"), "script-7", "脚本", [])
+
+        self.assertEqual(safe_output_video_filename("../bad name.txt", "script-8"), "bad-name.mp4")
+        self.assertEqual(strip_data_url_prefix("data:video/mp4;base64,ZHVtbXk="), "ZHVtbXk=")
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertIsInstance(default_avatar_video_provider(), MockAvatarVideoProvider)
+        with patch.dict(os.environ, {"AVATAR_VIDEO_PROVIDER": "external-http"}, clear=True):
+            with self.assertRaises(AvatarVideoProviderError):
+                default_avatar_video_provider()
+        with patch.dict(
+            os.environ,
+            {"AVATAR_VIDEO_PROVIDER": "external-http", "AVATAR_VIDEO_ENDPOINT": "https://avatar.example/render"},
+            clear=True,
+        ):
+            self.assertIsInstance(default_avatar_video_provider(), ExternalHttpAvatarVideoProvider)
 
     def test_deepseek_http_client_covers_success_and_error_mapping(self) -> None:
         # Test objective:

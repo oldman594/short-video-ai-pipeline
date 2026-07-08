@@ -73,7 +73,7 @@ python3 scripts/extract_text_local.py vision/61354d2054ca8878ffe02059f360e7fe.mp
 - 后台异步生成模拟转写、结构分析和 3 个原创脚本版本。
 - 在审核台编辑转写文本和脚本。
 - 批准一个脚本版本。
-- 批准后生成 mock 数字人草稿文件并可下载。
+- 批准后生成数字人渲染任务；默认 mock 草稿，也可接外部真实视频服务（开发中）。
 - 展示标题、封面文案、简介和标签。
 
 ## MVP 范围
@@ -97,7 +97,8 @@ python3 scripts/extract_text_local.py vision/61354d2054ca8878ffe02059f360e7fe.mp
 ## 当前限制
 
 - 文本提取路由已经存在，但本机未安装 FFmpeg、Whisper、Tesseract、yt-dlp 等工具时会使用回退文本。
-- 未配置 `DEEPSEEK_API_KEY` 时 LLM 使用 mock provider；配置后结构分析调用 DeepSeek，数字人渲染仍是 mock provider。
+- 未配置 `DEEPSEEK_API_KEY` 时 LLM 使用 mock provider；配置后结构分析调用 DeepSeek。
+- 真实数字人视频服务处于开发中；未配置外部服务时仍使用 mock 草稿。
 - 链接导入默认只记录链接，不下载外部平台视频；如果要从抖音等平台内容提取文本，请先在客户端合法保存视频，再作为本地文件附带上传给服务端。
 - 网络字幕抓取需要显式设置 `ALLOW_NETWORK_MEDIA_FETCH=1`，且 MVP 不抓取抖音链接。
 - 上传文件使用浏览器 base64 JSON 上传，适合 MVP 验证，不适合大文件生产使用。
@@ -130,6 +131,17 @@ bash scripts/install_text_tools.sh
 ```bash
 bash scripts/bootstrap_ocr_local.sh
 ```
+
+接入外部真实数字人视频服务（开发中）：
+
+```bash
+export AVATAR_VIDEO_PROVIDER="external-http"
+export AVATAR_VIDEO_ENDPOINT="https://your-avatar-service.example/render"
+export AVATAR_VIDEO_API_KEY="可选服务密钥"
+python3 -m app.main
+```
+
+外部服务需要接收 JSON 请求并返回 `output_video_url`，或返回 `output_base64` 和可选 `filename`，本项目会保存到 `data/outputs/`。
 
 语音识别路径会在服务端执行：
 

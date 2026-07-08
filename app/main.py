@@ -11,7 +11,6 @@ from urllib.parse import unquote, urlparse
 from uuid import uuid4
 
 from app.config import DB_PATH, OUTPUT_DIR, STATIC_DIR, UPLOAD_DIR, ensure_directories
-from app.providers import MockAvatarVideoProvider
 from app.storage import Repository
 from app.text_extraction import VALID_EXTRACTION_PREFERENCES, text_extraction_tool_status
 from app.workflow import BackgroundRunner, WorkflowService
@@ -174,7 +173,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         if script["status"] != "approved":
             self._error(HTTPStatus.CONFLICT, "script must be approved before rendering")
             return
-        job = REPOSITORY.create_render_job(script, MockAvatarVideoProvider.name)
+        job = REPOSITORY.create_render_job(script, WORKFLOW.avatar_provider.name)
         RUNNER.enqueue_render(script_id, job["id"])
         self._json_response(job, HTTPStatus.ACCEPTED)
 

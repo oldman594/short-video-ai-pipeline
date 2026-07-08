@@ -85,6 +85,7 @@ LLM：
 - D-ID
 - 硅基智能
 - 腾讯智影
+- 自建开源服务适配：SadTalker、Wav2Lip、MuseTalk、LivePortrait、Linly-Talker 等项目可以作为外部 HTTP 渲染服务的实现参考。
 
 视频处理：
 
@@ -371,6 +372,8 @@ GET /api/render-jobs/{render_job_id}
 LLM 输出尽量使用 JSON schema，避免自由文本难以解析。
 
 MVP 当前在 `DEEPSEEK_API_KEY` 存在时使用 DeepSeek 的 OpenAI-compatible Chat Completions 接口执行内容结构分析；未配置 key 时回退到 mock LLM provider。脚本生成仍可沿用 mock provider，后续再替换为真实 LLM 生成。
+
+真实数字人视频服务当前处于开发中。MVP 支持 `AVATAR_VIDEO_PROVIDER=external-http`，将已批准脚本发送到外部 HTTP 渲染服务。外部服务可以是商业 API 包装层，也可以是基于开源 talking-head 项目封装的内部服务。未配置时继续使用 mock avatar provider。
 
 内容分析输出示例：
 

@@ -260,7 +260,7 @@ function renderJobs(jobs) {
   els.renderJobs.innerHTML = jobs
     .map((job) => {
       const link = job.output_video_url
-        ? `<p><a href="${job.output_video_url}" target="_blank" rel="noreferrer">下载草稿文件</a></p>`
+        ? `<p><a href="${job.output_video_url}" target="_blank" rel="noreferrer">下载渲染结果</a></p>`
         : "";
       const error = job.error_message ? `<p>错误：${escapeHtml(job.error_message)}</p>` : "";
       return `
