@@ -47,6 +47,7 @@ from app.text_extraction import (
     format_srt_time,
     is_douyin_url,
     is_fallback_provider,
+    is_platform_ui_ocr_line,
     last_line,
     normalize_subtitle_text,
     parse_silencedetect,
@@ -55,11 +56,14 @@ from app.text_extraction import (
     read_sidecar_subtitle,
     result_from_text,
     restore_punctuation,
+    screen_text_sampling_filter,
+    screen_text_sampling_fps,
     screen_text_quality_score,
     select_best_local_auto_result,
     segments_from_text,
     split_long_segments,
     text_extraction_tool_status,
+    video_duration_seconds,
     whisper_cpp_config,
 )
 
@@ -595,6 +599,11 @@ class TextExtractionBranchTest(unittest.TestCase):
         self.assertIn("你好世界", normalized)
         self.assertEqual(dedupe_lines("a\na\nb"), "a\nb")
         self.assertIn("期末老师画重点", filter_ocr_text("xx\n期末老师画重点\n--\n"))
+        self.assertNotIn("抖音号", filter_ocr_text("抖音号：3863360\n最后得出一个结论\n"))
+        self.assertTrue(is_platform_ui_ocr_line("抖音搜索页扫一扫"))
+        self.assertTrue(is_platform_ui_ocr_line("来抖音 发现更多创作者"))
+        self.assertTrue(is_platform_ui_ocr_line("音号"))
+        self.assertFalse(is_platform_ui_ocr_line("最后得出一个结论"))
         self.assertTrue(is_douyin_url("https://www.douyin.com/video/1"))
         self.assertTrue(is_fallback_provider("speech-fallback"))
         self.assertEqual(last_line("a\nb\n"), "b")
@@ -611,6 +620,50 @@ class TextExtractionBranchTest(unittest.TestCase):
         self.assertIn("咪在2.25万平方厘米醒的床", rapid_text or "")
         with self.assertRaises(ExtractionError):
             rapidocr_text_from_json("not-json")
+
+    def test_screen_text_sampling_covers_long_videos_across_full_duration(self) -> None:
+        # Test objective:
+        # Verify that hard-subtitle OCR sampling scales across a long video instead
+        # of reading only the first fixed number of seconds.
+        #
+        # Construction method:
+        # 1. Call the pure FPS helper with short-video, long-video, invalid-duration,
+        #    and invalid-frame-limit inputs.
+        # 2. Patch FFprobe command discovery and process execution to return a
+        #    deterministic long-video duration.
+        # 3. Patch the FFprobe response to invalid output to cover the safe fallback.
+        #
+        # Input data:
+        # A synthetic 384 second duration matching the local long `vision/` sample,
+        # a 30 second short video duration, and malformed FFprobe stdout.
+        #
+        # Expected behavior:
+        # Short videos keep 1 fps; long videos lower fps to max_frames / duration so
+        # frames are spread through the whole media; missing or malformed FFprobe
+        # output falls back to 1 fps rather than failing OCR extraction.
+        class FakeProcess:
+            def __init__(self, stdout: str, returncode: int = 0):
+                self.stdout = stdout
+                self.stderr = ""
+                self.returncode = returncode
+
+        self.assertEqual(screen_text_sampling_fps(30.0, 120), 1.0)
+        self.assertAlmostEqual(screen_text_sampling_fps(384.0, 90), 0.234375)
+        self.assertEqual(screen_text_sampling_fps(None, 120), 1.0)
+        self.assertEqual(screen_text_sampling_fps(384.0, 0), 1.0)
+
+        with patch("app.text_extraction.shutil.which", return_value="/bin/ffprobe"), patch(
+            "app.text_extraction.subprocess.run", return_value=FakeProcess("383.965896\n")
+        ):
+            self.assertAlmostEqual(video_duration_seconds(Path("long.mp4")) or 0.0, 383.965896)
+            fps_filter = screen_text_sampling_filter(Path("long.mp4"), 90)
+        self.assertTrue(fps_filter.startswith("fps=0.2343"))
+
+        with patch("app.text_extraction.shutil.which", return_value="/bin/ffprobe"), patch(
+            "app.text_extraction.subprocess.run", return_value=FakeProcess("not-a-duration\n")
+        ):
+            self.assertIsNone(video_duration_seconds(Path("bad.mp4")))
+            self.assertEqual(screen_text_sampling_filter(Path("bad.mp4"), 90), "fps=1.000000")
 
     def test_vad_parsing_and_segment_splitting_cover_timestamp_alignment_helpers(self) -> None:
         # Test objective:

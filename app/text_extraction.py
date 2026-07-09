@@ -46,6 +46,9 @@ TEXT_EXTRACTION_TOOLS = {
     },
 }
 
+RAPIDOCR_SCREEN_TEXT_MAX_FRAMES = 90
+TESSERACT_SCREEN_TEXT_MAX_FRAMES = 45
+
 
 @dataclass(frozen=True)
 class ExtractionResult:
@@ -806,6 +809,7 @@ def format_srt_time(seconds: float) -> str:
 def extract_screen_text_with_tesseract(ffmpeg: str, tesseract: str, video_path: Path) -> str | None:
     with tempfile.TemporaryDirectory() as tmp:
         frame_pattern = str(Path(tmp) / "subtitle-%03d.png")
+        max_frames = TESSERACT_SCREEN_TEXT_MAX_FRAMES
         proc = subprocess.run(
             [
                 ffmpeg,
@@ -813,14 +817,16 @@ def extract_screen_text_with_tesseract(ffmpeg: str, tesseract: str, video_path: 
                 "-i",
                 str(video_path),
                 "-vf",
-                "fps=1,crop=iw*0.92:ih*0.34:iw*0.04:ih*0.52,scale=iw*2:ih*2,format=gray,eq=contrast=1.6:brightness=0.02",
+                f"{screen_text_sampling_filter(video_path, max_frames)},"
+                "crop=iw*0.65:ih*0.38:iw*0.12:ih*0.58,"
+                "scale=iw*2:ih*2,format=gray,eq=contrast=1.6:brightness=0.02",
                 "-frames:v",
-                "30",
+                str(max_frames),
                 frame_pattern,
             ],
             text=True,
             capture_output=True,
-            timeout=120,
+            timeout=180,
             check=False,
         )
         if proc.returncode != 0:
@@ -834,6 +840,7 @@ def extract_screen_text_with_tesseract(ffmpeg: str, tesseract: str, video_path: 
 def extract_screen_text_with_rapidocr(ffmpeg: str, config: dict, video_path: Path) -> str | None:
     with tempfile.TemporaryDirectory() as tmp:
         frame_pattern = str(Path(tmp) / "subtitle-%03d.png")
+        max_frames = RAPIDOCR_SCREEN_TEXT_MAX_FRAMES
         proc = subprocess.run(
             [
                 ffmpeg,
@@ -841,16 +848,17 @@ def extract_screen_text_with_rapidocr(ffmpeg: str, config: dict, video_path: Pat
                 "-i",
                 str(video_path),
                 "-vf",
-                "fps=1,crop=iw*0.88:ih*0.16:iw*0.06:ih*0.64,"
-                "scale=iw*3:ih*3,format=gray,eq=contrast=2.2:brightness=0.02,"
+                f"{screen_text_sampling_filter(video_path, max_frames)},"
+                "crop=iw*0.65:ih*0.38:iw*0.12:ih*0.58,"
+                "scale=iw*3:ih*3,format=gray,eq=contrast=2.6:brightness=0.04,"
                 "unsharp=5:5:1.2",
                 "-frames:v",
-                "45",
+                str(max_frames),
                 frame_pattern,
             ],
             text=True,
             capture_output=True,
-            timeout=180,
+            timeout=300,
             check=False,
         )
         if proc.returncode != 0:
@@ -864,7 +872,7 @@ def extract_screen_text_with_rapidocr(ffmpeg: str, config: dict, video_path: Pat
                 str(config["helper"]),
                 "--json",
                 "--min-confidence",
-                "0.55",
+                "0.50",
                 *[str(frame) for frame in frames],
             ],
             text=True,
@@ -875,6 +883,50 @@ def extract_screen_text_with_rapidocr(ffmpeg: str, config: dict, video_path: Pat
         if ocr.returncode != 0:
             raise ExtractionError(f"RapidOCR 识别失败：{last_line(ocr.stderr)}")
         return rapidocr_text_from_json(ocr.stdout)
+
+
+def screen_text_sampling_filter(video_path: Path, max_frames: int) -> str:
+    duration = video_duration_seconds(video_path)
+    fps = screen_text_sampling_fps(duration, max_frames)
+    return f"fps={fps:.6f}"
+
+
+def screen_text_sampling_fps(duration_seconds: float | None, max_frames: int) -> float:
+    if max_frames <= 0:
+        return 1.0
+    if duration_seconds is None or duration_seconds <= 0 or duration_seconds <= max_frames:
+        return 1.0
+    return max(max_frames / duration_seconds, 0.001)
+
+
+def video_duration_seconds(video_path: Path) -> float | None:
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return None
+    proc = subprocess.run(
+        [
+            ffprobe,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(video_path),
+        ],
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return None
+    try:
+        duration = float(proc.stdout.strip())
+    except ValueError:
+        return None
+    return duration if duration > 0 else None
 
 
 def rapidocr_text_from_json(output: str) -> str | None:
@@ -971,6 +1023,8 @@ def filter_ocr_text(text: str) -> str:
         cleaned = re.sub(r"[|=_~`^•·]+", "", cleaned).strip()
         if not cleaned:
             continue
+        if is_platform_ui_ocr_line(cleaned):
+            continue
         cjk_count = len(re.findall(r"[\u4e00-\u9fff]", cleaned))
         alpha_count = len(re.findall(r"[A-Za-z0-9]", cleaned))
         if cjk_count >= 4:
@@ -980,6 +1034,25 @@ def filter_ocr_text(text: str) -> str:
         elif alpha_count >= 8 and cjk_count > 0:
             lines.append(cleaned)
     return dedupe_lines("\n".join(lines))
+
+
+def is_platform_ui_ocr_line(text: str) -> bool:
+    compact = re.sub(r"\s+", "", text)
+    if not compact:
+        return True
+    ui_markers = (
+        "抖音号",
+        "抖号",
+        "抖管号",
+        "抖音搜索",
+        "抖音搜索页",
+        "截图保存",
+        "扫一扫",
+        "发现更多创作者",
+    )
+    if any(marker in compact for marker in ui_markers):
+        return True
+    return compact in {"搜索", "搜索页", "抖音", "音号", "科音号"} or (compact.endswith("音号") and len(compact) <= 4)
 
 
 def result_from_text(
