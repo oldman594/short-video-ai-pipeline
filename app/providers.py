@@ -91,24 +91,35 @@ class MockLLMProvider:
 
     def generate_scripts(self, transcript: str, analysis: dict, title: str) -> list[dict]:
         topic = analysis.get("topic") or title or "这个主题"
+        writing_profile = derive_writing_profile(transcript, analysis)
+        structure_line = " -> ".join(writing_profile["structure_steps"])
+        rhythm_line = writing_profile["rhythm"]
         hooks = [
-            f"很多人做{topic}，一开始就把顺序搞反了。",
-            f"如果你也在研究{topic}，先别急着照搬别人的做法。",
-            f"真正影响{topic}效果的，往往不是技巧数量，而是判断顺序。",
+            f"很多人做{topic}，问题不是不会做，而是开头就站错了位置。",
+            f"如果你也在研究{topic}，先别急着找技巧，先把判断顺序理清楚。",
+            f"真正影响{topic}效果的，往往不是方法数量，而是你先讲什么、后讲什么。",
         ]
+        angles = [
+            "痛点拆解版",
+            "反差判断版",
+            "行动清单版",
+        ]
+        transitions = ["先看场景", "接着拆原因", "最后给动作"]
         scripts = []
         for index, hook in enumerate(hooks, start=1):
             script_text = dedent(
                 f"""
                 {hook}
 
-                第一，先确认你的目标观众现在最困惑的点是什么。不要一上来讲完整理论，先把一个具体场景说清楚。
+                这版参考的不是原文句子，而是它的写作模式：{structure_line}。节奏上用{rhythm_line}，让观众不用等铺垫，先听到结论。
 
-                第二，把参考内容里的结构拆出来，但案例和表达要重新组织。你可以保留“痛点、原因、方法、行动”的节奏，但不要保留原文句子。
+                {transitions[0]}：把观众正在遇到的具体问题说出来。不要讲一大段背景，直接指出一个他们会点头的瞬间。
 
-                第三，结尾给一个明确动作：让观众保存这条内容，或者在评论区写下自己的场景。这样内容既有信息量，也有互动入口。
+                {transitions[1]}：把这个问题为什么反复出现讲清楚。这里换成我们自己的案例和表达，只保留“先判断、再解释、再给路径”的推进方式。
 
-                这版脚本适合做 45 到 60 秒口播，语气直接，重点放在可执行方法上。
+                {transitions[2]}：给三个可以马上执行的小步骤。第一步先定目标观众，第二步重写案例，第三步检查有没有复用原视频的句子、口头禅和身份表达。
+
+                结尾回到一个明确动作：收藏这条内容，按这个顺序把自己的选题重写一遍。{angles[index - 1]}适合做 45 到 60 秒数字人口播。
                 """
             ).strip()
             scripts.append(
@@ -121,14 +132,14 @@ class MockLLMProvider:
                         {"scene": 3, "visual": "结尾展示行动提示和封面关键词。"},
                     ],
                     "title_options": [
-                        f"{topic}别急着照搬，先拆这 3 步",
-                        f"把{topic}讲清楚的一个简单框架",
-                        f"做{topic}前先看这个判断顺序",
+                        f"{topic}别照搬，先拆写作模式",
+                        f"把{topic}重写成原创稿的 3 步",
+                        f"做{topic}前先看这个结构顺序",
                     ],
                     "cover_text_options": [
-                        "先拆结构",
-                        "别直接照搬",
-                        "3 步改成原创",
+                        "先拆模式",
+                        "原创重写",
+                        "3 步出稿",
                     ],
                     "tags": ["短视频脚本", "内容创作", "原创改写", "数字人口播"],
                 }
@@ -170,6 +181,17 @@ class DeepSeekAnalysisProvider:
         return normalize_analysis(analysis, title, transcript, self.name)
 
     def generate_scripts(self, transcript: str, analysis: dict, title: str) -> list[dict]:
+        writing_profile = derive_writing_profile(transcript, analysis)
+        try:
+            payload = self._script_generation_payload(transcript, analysis, title, writing_profile)
+            response = self._post_chat_completion(payload)
+            content = extract_chat_message_content(response)
+            parsed = parse_json_object(content)
+            scripts = normalize_scripts(parsed.get("scripts"), analysis, title, transcript, writing_profile)
+            if scripts:
+                return scripts
+        except DeepSeekProviderError:
+            pass
         return self.script_provider.generate_scripts(transcript, analysis, title)
 
     def _chat_completion_payload(self, transcript: str, title: str, platform: str) -> dict:
@@ -211,6 +233,60 @@ class DeepSeekAnalysisProvider:
             "thinking": {"type": "disabled"},
             "temperature": 0.2,
             "max_tokens": 1800,
+        }
+
+    def _script_generation_payload(self, transcript: str, analysis: dict, title: str, writing_profile: dict) -> dict:
+        system_prompt = dedent(
+            """
+            你是短视频原创脚本策划。请只输出 json 对象，不要输出 markdown。
+            任务是参考原视频的写作结构、节奏和段落功能，生成新的原创数字人口播脚本。
+            严禁逐句改写、搬运原文金句、复用原作者独特身份表达、声音或口头禅。
+
+            json schema:
+            {
+              "scripts": [
+                {
+                  "version": 1,
+                  "script_text": "完整口播稿",
+                  "storyboard": [{"scene": 1, "visual": "画面建议"}],
+                  "title_options": ["标题"],
+                  "cover_text_options": ["封面文案"],
+                  "tags": ["标签"]
+                }
+              ]
+            }
+            """
+        ).strip()
+        user_prompt = dedent(
+            f"""
+            请生成 3 个原创视频稿版本，每版 45 到 60 秒。
+
+            标题：{title or analysis.get("topic") or "未填写"}
+            主题：{analysis.get("topic") or "未识别"}
+            受众：{analysis.get("audience") or "短视频观众"}
+            内容类型：{analysis.get("category") or "知识口播"}
+            开场模式：{writing_profile["opening_pattern"]}
+            叙事节奏：{writing_profile["rhythm"]}
+            句式风格：{writing_profile["sentence_style"]}
+            结构步骤：{" -> ".join(writing_profile["structure_steps"])}
+            转场方式：{writing_profile["transition_style"]}
+            结尾方式：{writing_profile["ending_pattern"]}
+            合规要求：{"; ".join(writing_profile["avoid_copy_rules"])}
+
+            参考转写文本只用于理解结构，不要复制其中句子：
+            {transcript[:5000]}
+            """
+        ).strip()
+        return {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "response_format": {"type": "json_object"},
+            "thinking": {"type": "disabled"},
+            "temperature": 0.6,
+            "max_tokens": 3600,
         }
 
     def _post_chat_completion(self, payload: dict) -> dict:
@@ -280,6 +356,114 @@ def normalize_analysis(analysis: dict, title: str, transcript: str, provider: st
     }
 
 
+def derive_writing_profile(transcript: str, analysis: dict) -> dict:
+    lines = [clean_string(line) for line in transcript.splitlines()]
+    lines = [line for line in lines if line]
+    structure = normalize_structure_list(analysis.get("structure"))
+    structure_steps = [strip_terminal_punctuation(item["summary"]) for item in structure[:5]]
+    if not structure_steps:
+        structure_steps = ["先抛出痛点或反差判断", "用具体场景解释原因", "给出可执行步骤", "用互动动作收尾"]
+
+    avg_line_length = sum(len(line) for line in lines) / max(len(lines), 1)
+    has_numbered_steps = any(marker in transcript for marker in ["第一", "第二", "第三", "1.", "2.", "3."])
+    has_question = "?" in transcript or "？" in transcript
+    has_action_close = any(marker in transcript for marker in ["收藏", "评论", "转发", "关注", "试试", "复盘"])
+
+    if avg_line_length <= 18:
+        rhythm = "短句快节奏推进"
+        sentence_style = "短句、直接判断、少铺垫"
+    elif avg_line_length <= 36:
+        rhythm = "中等长度句子承接观点和解释"
+        sentence_style = "判断句搭配解释句"
+    else:
+        rhythm = "长句解释较多，需要压缩成口播短句"
+        sentence_style = "先拆长句，再改成可听懂的短句"
+
+    opening_pattern = clean_string(analysis.get("hook")) or "用一个痛点、反差或问题快速开场"
+    if has_question:
+        opening_pattern = f"{opening_pattern}，可加入提问式钩子"
+    if has_numbered_steps:
+        transition_style = "用编号步骤推进，让观众清楚记住顺序"
+    else:
+        transition_style = "用场景、原因、方法的转场推进"
+    if has_action_close:
+        ending_pattern = "结尾给收藏、评论或复盘动作"
+    else:
+        ending_pattern = "结尾补一个可立即执行的动作"
+
+    return {
+        "opening_pattern": opening_pattern,
+        "rhythm": rhythm,
+        "sentence_style": sentence_style,
+        "structure_steps": structure_steps,
+        "transition_style": transition_style,
+        "ending_pattern": ending_pattern,
+        "avoid_copy_rules": [
+            "只学习结构和节奏，不复制原文句子",
+            "替换案例、身份表达和口头禅",
+            "输出前保留人工审核，确认事实和相似度风险",
+        ],
+    }
+
+
+def normalize_scripts(
+    value: object,
+    analysis: dict,
+    title: str,
+    transcript: str,
+    writing_profile: dict,
+) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    topic = clean_string(analysis.get("topic")) or title or MockLLMProvider._derive_topic(transcript)
+    normalized = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        script_text = clean_multiline_text(item.get("script_text"))
+        if not script_text:
+            continue
+        normalized.append(
+            {
+                "version": len(normalized) + 1,
+                "script_text": script_text,
+                "storyboard": normalize_storyboard_list(item.get("storyboard")),
+                "title_options": normalize_string_list(item.get("title_options"))
+                or [f"{topic}的原创表达框架"],
+                "cover_text_options": normalize_string_list(item.get("cover_text_options"))
+                or ["原创脚本", "结构拆解"],
+                "tags": normalize_string_list(item.get("tags")) or ["短视频脚本", "原创改写"],
+            }
+        )
+        if len(normalized) == 3:
+            break
+    if normalized:
+        for script in normalized:
+            if not script["storyboard"]:
+                script["storyboard"] = [
+                    {"scene": 1, "visual": f"数字人口播，字幕强调{writing_profile['opening_pattern'][:18]}"},
+                    {"scene": 2, "visual": "屏幕列出结构步骤和原创案例。"},
+                    {"scene": 3, "visual": "结尾展示互动动作和封面关键词。"},
+                ]
+    return normalized
+
+
+def normalize_storyboard_list(value: object) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    normalized = []
+    for item in value:
+        if isinstance(item, dict):
+            visual = clean_string(item.get("visual"))
+            scene = item.get("scene")
+        else:
+            visual = clean_string(item)
+            scene = len(normalized) + 1
+        if visual:
+            normalized.append({"scene": scene if isinstance(scene, int) else len(normalized) + 1, "visual": visual})
+    return normalized[:8]
+
+
 def normalize_structure_list(value: object) -> list[dict]:
     if not isinstance(value, list):
         return []
@@ -307,6 +491,18 @@ def clean_string(value: object) -> str:
     if not isinstance(value, str):
         return ""
     return " ".join(value.split()).strip()
+
+
+def clean_multiline_text(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    lines = [clean_string(line) for line in value.splitlines()]
+    compact_lines = [line for line in lines if line]
+    return "\n".join(compact_lines).strip()
+
+
+def strip_terminal_punctuation(value: str) -> str:
+    return value.rstrip("。！？!?；;，,、 ")
 
 
 class MockAvatarVideoProvider:

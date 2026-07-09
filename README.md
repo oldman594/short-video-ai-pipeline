@@ -37,7 +37,7 @@ python3 -m unittest discover -s tests
 python3 scripts/check_line_coverage.py
 ```
 
-启用 DeepSeek 做结构分析：
+启用 DeepSeek 做结构分析和原创脚本生成：
 
 ```bash
 export DEEPSEEK_API_KEY="你的 DeepSeek API Key"
@@ -70,7 +70,7 @@ python3 scripts/extract_text_local.py vision/61354d2054ca8878ffe02059f360e7fe.mp
 - 链接项目可以同时附带本地保存的视频文件，文本提取由服务端完成。
 - 上传本地视频或音频文件并保存到 `data/uploads/`。
 - 按情况选择文本提取路径：自动判断、字幕轨、语音识别、画面文字 OCR、网络字幕。
-- 后台异步生成模拟转写、结构分析和 3 个原创脚本版本。
+- 后台异步提取文本、分析写作模式，并生成 3 个原创脚本版本。
 - 在审核台编辑转写文本和脚本。
 - 批准一个脚本版本。
 - 批准后生成数字人渲染任务；默认 mock 草稿，也可接外部真实视频服务（开发中）。
@@ -97,7 +97,7 @@ python3 scripts/extract_text_local.py vision/61354d2054ca8878ffe02059f360e7fe.mp
 ## 当前限制
 
 - 文本提取路由已经存在，但本机未安装 FFmpeg、Whisper、Tesseract、yt-dlp 等工具时会使用回退文本。
-- 未配置 `DEEPSEEK_API_KEY` 时 LLM 使用 mock provider；配置后结构分析调用 DeepSeek。
+- 未配置 `DEEPSEEK_API_KEY` 时 LLM 使用 mock provider；配置后结构分析和脚本生成会优先调用 DeepSeek，失败时回退到本地 mock provider。
 - 真实数字人视频服务处于开发中；未配置外部服务时仍使用 mock 草稿。
 - 链接导入默认只记录链接，不下载外部平台视频；如果要从抖音等平台内容提取文本，请先在客户端合法保存视频，再作为本地文件附带上传给服务端。
 - 网络字幕抓取需要显式设置 `ALLOW_NETWORK_MEDIA_FETCH=1`，且 MVP 不抓取抖音链接。

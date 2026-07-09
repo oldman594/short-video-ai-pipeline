@@ -20,11 +20,13 @@ from app.providers import (
     SourceInput,
     default_avatar_video_provider,
     default_llm_provider,
+    derive_writing_profile,
     did_authorization_header,
     did_source_url_from_local_photo,
     extract_chat_message_content,
     local_avatar_photo_path,
     normalize_analysis,
+    normalize_scripts,
     parse_json_object,
     safe_output_video_filename,
     strip_data_url_prefix,
@@ -120,9 +122,9 @@ class ProviderBranchTest(unittest.TestCase):
         # A transcript, title, and fake DeepSeek JSON content.
         #
         # Expected behavior:
-        # The provider returns normalized analysis with provider metadata, delegates
-        # script generation to the mock script provider, and raises clear errors for
-        # invalid DeepSeek response shapes.
+        # The provider returns normalized analysis with provider metadata, generates
+        # scripts through the script prompt path when possible, and raises clear
+        # errors for invalid DeepSeek response shapes.
         class FakeDeepSeek(DeepSeekAnalysisProvider):
             def _post_chat_completion(self, payload: dict) -> dict:
                 self.last_payload = payload
@@ -156,6 +158,136 @@ class ProviderBranchTest(unittest.TestCase):
         normalized = normalize_analysis({"structure": ["直接指出痛点"], "key_points": [123, "改写表达"]}, "", "文本", "p")
         self.assertEqual(normalized["structure"][0]["summary"], "直接指出痛点")
         self.assertEqual(normalized["key_points"], ["改写表达"])
+
+    def test_writing_profile_drives_original_script_generation_without_copying_source_lines(self) -> None:
+        # Test objective:
+        # Verify that script generation is no longer a generic template-only step:
+        # it first derives a writing profile from the extracted transcript and then
+        # uses that profile to produce original draft scripts.
+        #
+        # Construction method:
+        # 1. Build a transcript with short on-screen subtitle lines, a question, and
+        #    numbered steps so the profile has recognizable rhythm and transition cues.
+        # 2. Generate scripts through the deterministic mock provider.
+        # 3. Normalize a synthetic DeepSeek script response to cover the same storage
+        #    contract used by the workflow.
+        #
+        # Input data:
+        # A short Chinese transcript containing the source phrase "期末老师人画重点",
+        # a normalized analysis object, and one synthetic LLM script payload.
+        #
+        # Expected behavior:
+        # The writing profile captures short-sentence rhythm and numbered-step
+        # transitions; generated scripts mention the transformed writing mode, return
+        # three complete versions, and do not copy the source phrase verbatim.
+        transcript = "你是不是总在期末慌？\n第一，期末老师人画重点。\n第二，先复盘错题。\n记得收藏。"
+        analysis = normalize_analysis(
+            {
+                "topic": "期末复习",
+                "hook": "提问式痛点开场",
+                "structure": ["开场提问", "编号拆步骤", "结尾给收藏动作"],
+                "key_points": ["保留节奏，不复用原句"],
+            },
+            "期末复习",
+            transcript,
+            "test-provider",
+        )
+
+        profile = derive_writing_profile(transcript, analysis)
+        self.assertIn("短句", profile["rhythm"])
+        self.assertIn("编号步骤", profile["transition_style"])
+        scripts = MockLLMProvider().generate_scripts(transcript, analysis, "期末复习")
+
+        self.assertEqual(len(scripts), 3)
+        self.assertTrue(all("写作模式" in script["script_text"] for script in scripts))
+        self.assertTrue(all("期末老师人画重点" not in script["script_text"] for script in scripts))
+        self.assertTrue(all(script["storyboard"] for script in scripts))
+
+        normalized_scripts = normalize_scripts(
+            [
+                {
+                    "script_text": "先给结论。\n再讲原因。\n最后给动作。",
+                    "title_options": ["复习别乱来"],
+                }
+            ],
+            analysis,
+            "期末复习",
+            transcript,
+            profile,
+        )
+        self.assertEqual(normalized_scripts[0]["version"], 1)
+        self.assertIn("\n", normalized_scripts[0]["script_text"])
+        self.assertTrue(normalized_scripts[0]["storyboard"])
+
+    def test_deepseek_script_generation_uses_writing_profile_prompt_without_live_api(self) -> None:
+        # Test objective:
+        # Verify that the DeepSeek adapter can handle the full content chain after
+        # text extraction: structure analysis followed by writing-profile-aware script
+        # generation, without calling the live DeepSeek API.
+        #
+        # Construction method:
+        # 1. Subclass the provider and return different fake JSON payloads for the
+        #    analysis prompt and the script-generation prompt.
+        # 2. Capture the script-generation payload so the prompt contract can be
+        #    inspected directly.
+        # 3. Call analyze and generate_scripts with one transcript.
+        #
+        # Input data:
+        # A transcript about study planning and fake DeepSeek responses containing
+        # two script drafts with title, cover, storyboard, and tag fields.
+        #
+        # Expected behavior:
+        # The provider returns normalized scripts from the DeepSeek response, includes
+        # writing-profile fields such as opening pattern and structure steps in the
+        # prompt, and does not fall back to the deterministic mock script provider.
+        class FakeDeepSeek(DeepSeekAnalysisProvider):
+            def _post_chat_completion(self, payload: dict) -> dict:
+                user_content = payload["messages"][1]["content"]
+                if "请生成 3 个原创视频稿版本" in user_content:
+                    self.script_payload = payload
+                    return {
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": (
+                                        '{"scripts":['
+                                        '{"version":1,"script_text":"先给结论。\\n再拆原因。",'
+                                        '"storyboard":[{"scene":1,"visual":"数字人口播"}],'
+                                        '"title_options":["复习先定顺序"],'
+                                        '"cover_text_options":["先定顺序"],"tags":["学习"]},'
+                                        '{"version":2,"script_text":"先看场景。\\n再给动作。",'
+                                        '"storyboard":["步骤字幕"],"title_options":["复习别乱"],'
+                                        '"cover_text_options":["别乱复习"],"tags":["方法"]}'
+                                        ']}'
+                                    )
+                                }
+                            }
+                        ]
+                    }
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": (
+                                    '{"topic":"学习规划","audience":"大学生","category":"知识口播",'
+                                    '"hook":"提问式痛点开场","structure":["开场提问","编号步骤","行动收尾"],'
+                                    '"key_points":["迁移结构"],"risks":["不要复制原文"]}'
+                                )
+                            }
+                        }
+                    ]
+                }
+
+        provider = FakeDeepSeek(api_key="test-key", base_url="https://example.test", timeout_seconds=1)
+        analysis = provider.analyze("你是不是总在期末慌？第一步先看重点。", "复习规划", "douyin")
+        scripts = provider.generate_scripts("你是不是总在期末慌？第一步先看重点。", analysis, "复习规划")
+
+        self.assertEqual(len(scripts), 2)
+        self.assertEqual(scripts[0]["script_text"], "先给结论。\n再拆原因。")
+        self.assertEqual(scripts[0]["title_options"], ["复习先定顺序"])
+        self.assertIn("开场模式", provider.script_payload["messages"][1]["content"])
+        self.assertIn("结构步骤", provider.script_payload["messages"][1]["content"])
+        self.assertNotIn("很多人做学习规划", scripts[0]["script_text"])
 
     def test_default_llm_provider_selects_deepseek_only_when_api_key_exists(self) -> None:
         # Test objective:

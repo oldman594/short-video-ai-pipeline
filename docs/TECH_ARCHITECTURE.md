@@ -371,7 +371,7 @@ GET /api/render-jobs/{render_job_id}
 
 LLM 输出尽量使用 JSON schema，避免自由文本难以解析。
 
-MVP 当前在 `DEEPSEEK_API_KEY` 存在时使用 DeepSeek 的 OpenAI-compatible Chat Completions 接口执行内容结构分析；未配置 key 时回退到 mock LLM provider。脚本生成仍可沿用 mock provider，后续再替换为真实 LLM 生成。
+MVP 当前在 `DEEPSEEK_API_KEY` 存在时使用 DeepSeek 的 OpenAI-compatible Chat Completions 接口执行内容结构分析，并基于写作模式画像生成原创脚本；未配置 key 或调用失败时回退到 mock LLM provider。
 
 真实数字人视频服务当前处于开发中。MVP 支持 `AVATAR_VIDEO_PROVIDER=external-http`，将已批准脚本发送到外部 HTTP 渲染服务。外部服务可以是商业 API 包装层，也可以是基于开源 talking-head 项目封装的内部服务。MVP 也支持 `AVATAR_VIDEO_PROVIDER=did` 直接调用 D-ID Talks API。未配置时继续使用 mock avatar provider。
 
