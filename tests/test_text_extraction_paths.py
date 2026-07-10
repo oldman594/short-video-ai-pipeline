@@ -185,8 +185,8 @@ class ProviderBranchTest(unittest.TestCase):
         #
         # Expected behavior:
         # The writing profile captures short-sentence rhythm and numbered-step
-        # transitions; generated scripts mention the transformed writing mode, return
-        # three complete versions, and do not copy the source phrase verbatim.
+        # transitions; generated scripts return three complete target-topic versions
+        # without exposing backend planning labels or copying the source phrase.
         transcript = "你是不是总在期末慌？\n第一，期末老师人画重点。\n第二，先复盘错题。\n记得收藏。"
         analysis = normalize_analysis(
             {
@@ -203,10 +203,20 @@ class ProviderBranchTest(unittest.TestCase):
         profile = derive_writing_profile(transcript, analysis)
         self.assertIn("短句", profile["rhythm"])
         self.assertIn("编号步骤", profile["transition_style"])
-        scripts = MockLLMProvider().generate_scripts(transcript, analysis, "期末复习")
+        scripts = MockLLMProvider().generate_scripts(
+            transcript,
+            analysis,
+            "期末复习",
+            target_topic="介绍小动物比如小狗",
+        )
 
         self.assertEqual(len(scripts), 3)
-        self.assertTrue(all("写作模式" in script["script_text"] for script in scripts))
+        self.assertTrue(all("小狗" in script["script_text"] for script in scripts))
+        self.assertTrue(all("写作模式" not in script["script_text"] for script in scripts))
+        self.assertTrue(all("目标主题素材" not in script["script_text"] for script in scripts))
+        self.assertTrue(all("参考视频" not in script["script_text"] for script in scripts))
+        self.assertTrue(all("这版适合" not in script["script_text"] for script in scripts))
+        self.assertIn("小狗", scripts[0]["script_text"])
         self.assertTrue(all("期末老师人画重点" not in script["script_text"] for script in scripts))
         self.assertTrue(all(script["storyboard"] for script in scripts))
 
@@ -299,7 +309,8 @@ class ProviderBranchTest(unittest.TestCase):
         self.assertEqual(scripts[0]["script_text"], "先给结论。\n再拆原因。")
         self.assertEqual(scripts[0]["title_options"], ["复习先定顺序"])
         self.assertIn("开场模式", provider.script_payload["messages"][1]["content"])
-        self.assertIn("结构步骤", provider.script_payload["messages"][1]["content"])
+        self.assertIn("结构适配判断", provider.script_payload["messages"][1]["content"])
+        self.assertIn("仅当结构适配判断为 transfer_structure 时使用", provider.script_payload["messages"][1]["content"])
         self.assertIn("用户选择的新主题：AI 学习助手", provider.script_payload["messages"][1]["content"])
         self.assertIn("面向大学新生", provider.script_payload["messages"][1]["content"])
         self.assertNotIn("很多人做学习规划", scripts[0]["script_text"])

@@ -88,38 +88,29 @@ class MockLLMProvider:
         target_notes: str | None = None,
     ) -> list[dict]:
         topic = clean_string(target_topic) or analysis.get("topic") or title or "这个主题"
+        subject = script_subject_from_target_topic(topic)
         writing_profile = derive_writing_profile(transcript, analysis)
-        structure_line = " -> ".join(writing_profile["structure_steps"])
-        rhythm_line = writing_profile["rhythm"]
-        target_brief = build_target_topic_brief(topic, target_notes or "")
+        strategy = choose_script_structure_strategy(analysis, topic)
+        outlines = target_topic_script_outlines(topic, target_notes or "", strategy)
         hooks = [
-            f"很多人做{topic}，问题不是不会做，而是开头就站错了位置。",
-            f"如果你也在研究{topic}，先别急着找技巧，先把判断顺序理清楚。",
-            f"真正影响{topic}效果的，往往不是方法数量，而是你先讲什么、后讲什么。",
+            f"介绍{subject}，不要只停在“可爱”两个字。",
+            f"如果你想把{subject}讲得让人愿意看完，先抓住一个具体场景。",
+            f"真正让{subject}内容有记忆点的，不是堆资料，而是讲清楚它和观众有什么关系。",
         ]
-        angles = [
-            "痛点拆解版",
-            "反差判断版",
-            "行动清单版",
-        ]
-        transitions = ["先看场景", "接着拆原因", "最后给动作"]
         scripts = []
         for index, hook in enumerate(hooks, start=1):
+            outline = outlines[index - 1]
             script_text = dedent(
                 f"""
                 {hook}
 
-                这版参考的不是原文句子，而是它的写作模式：{structure_line}。节奏上用{rhythm_line}，让观众不用等铺垫，先听到结论。
+                {outline["scene"]}
 
-                目标主题素材：{target_brief}
+                {outline["explain"]}
 
-                {transitions[0]}：把{topic}里观众正在遇到的具体问题说出来。不要讲一大段背景，直接指出一个他们会点头的瞬间。
+                {outline["details"]}
 
-                {transitions[1]}：把这个问题为什么反复出现讲清楚。这里必须换成{topic}自己的案例和表达，只保留参考视频“先判断、再解释、再给路径”的推进方式。
-
-                {transitions[2]}：给三个可以马上执行的小步骤。第一步先定目标观众，第二步重写案例，第三步检查有没有复用原视频的句子、口头禅和身份表达。
-
-                结尾回到一个明确动作：收藏这条内容，按这个顺序把自己的选题重写一遍。{angles[index - 1]}适合做 45 到 60 秒数字人口播。
+                {outline["close"]}
                 """
             ).strip()
             scripts.append(
@@ -132,14 +123,14 @@ class MockLLMProvider:
                         {"scene": 3, "visual": "结尾展示行动提示和封面关键词。"},
                     ],
                     "title_options": [
-                        f"{topic}别照搬，先拆写作模式",
-                        f"把{topic}重写成原创稿的 3 步",
-                        f"做{topic}前先看这个结构顺序",
+                        f"介绍{subject}，别只说可爱",
+                        f"把{subject}讲清楚的 3 个角度",
+                        f"第一次了解{subject}先看这些点",
                     ],
                     "cover_text_options": [
-                        "先拆模式",
-                        "原创重写",
-                        "3 步出稿",
+                        "不只可爱",
+                        "3 个重点",
+                        "新手先看",
                     ],
                     "tags": ["短视频脚本", "内容创作", "原创改写", "数字人口播"],
                 }
@@ -191,6 +182,7 @@ class DeepSeekAnalysisProvider:
         writing_profile = derive_writing_profile(transcript, analysis)
         resolved_target_topic = clean_string(target_topic) or analysis.get("topic") or title
         resolved_target_notes = target_notes or ""
+        structure_strategy = choose_script_structure_strategy(analysis, resolved_target_topic)
         try:
             payload = self._script_generation_payload(
                 transcript,
@@ -199,6 +191,7 @@ class DeepSeekAnalysisProvider:
                 writing_profile,
                 resolved_target_topic,
                 resolved_target_notes,
+                structure_strategy,
             )
             response = self._post_chat_completion(payload)
             content = extract_chat_message_content(response)
@@ -278,15 +271,20 @@ class DeepSeekAnalysisProvider:
         writing_profile: dict,
         target_topic: str,
         target_notes: str,
+        structure_strategy: dict,
     ) -> dict:
         system_prompt = dedent(
             """
             你是短视频原创脚本策划。请只输出 json 对象，不要输出 markdown。
             任务是参考原视频的写作结构、节奏和段落功能，围绕用户选择的新主题生成原创数字人口播脚本。
-            参考视频只提供结构和表达节奏；目标主题才是新脚本的信息内容。
+            参考视频只提供可选的结构和表达节奏；目标主题才是新脚本的信息内容。
+            你必须先判断参考结构是否适合目标主题：
+            - 适合：可以迁移段落功能和推进顺序。
+            - 不适合：不要强套参考结构，只保留节奏、短句密度或开场力度，改用目标主题自己的自然结构。
             生成前先围绕目标主题整理可用素材：核心概念、目标受众痛点、常见误解、具体例子和可验证事实。
             如果目标主题需要最新事实或具体数据，而用户没有提供资料，请标注“需人工核验”，不要编造精确数据。
             严禁逐句改写、搬运原文金句、复用原作者独特身份表达、声音或口头禅。
+            成稿里不要出现“参考视频”“写作模式”“目标主题素材”“结构步骤”等后台说明。
 
             json schema:
             {
@@ -312,6 +310,7 @@ class DeepSeekAnalysisProvider:
             用户选择的新主题：{target_topic or "未填写"}
             用户补充资料：{target_notes or "无"}
             目标主题素材提示：{build_target_topic_brief(target_topic, target_notes)}
+            结构适配判断：{structure_strategy["mode"]}，原因：{structure_strategy["reason"]}
 
             请严格按“用户选择的新主题”写稿，不要继续写参考视频主题，除非二者相同。
             受众：{analysis.get("audience") or "短视频观众"}
@@ -319,7 +318,7 @@ class DeepSeekAnalysisProvider:
             开场模式：{writing_profile["opening_pattern"]}
             叙事节奏：{writing_profile["rhythm"]}
             句式风格：{writing_profile["sentence_style"]}
-            结构步骤：{" -> ".join(writing_profile["structure_steps"])}
+            可参考结构步骤（仅当结构适配判断为 transfer_structure 时使用）：{" -> ".join(writing_profile["structure_steps"])}
             转场方式：{writing_profile["transition_style"]}
             结尾方式：{writing_profile["ending_pattern"]}
             合规要求：{"; ".join(writing_profile["avoid_copy_rules"])}
@@ -548,6 +547,112 @@ def build_target_topic_brief(target_topic: str, target_notes: str) -> str:
     if notes:
         brief_parts.insert(1, f"用户补充资料：{notes}。")
     return " ".join(brief_parts)
+
+
+def script_subject_from_target_topic(target_topic: str) -> str:
+    topic = clean_string(target_topic) or "这个主题"
+    for marker in ("比如", "例如", "像"):
+        if marker in topic:
+            candidate = clean_string(topic.split(marker, 1)[1])
+            if candidate:
+                return candidate[:20]
+    prefixes = ("介绍", "讲讲", "科普", "分析")
+    for prefix in prefixes:
+        if topic.startswith(prefix) and len(topic) > len(prefix):
+            return topic[len(prefix) :][:20]
+    return topic[:24]
+
+
+def choose_script_structure_strategy(analysis: dict, target_topic: str) -> dict:
+    reference_text = " ".join(
+        [
+            clean_string(analysis.get("topic")),
+            clean_string(analysis.get("category")),
+            clean_string(analysis.get("hook")),
+            " ".join(item["summary"] for item in normalize_structure_list(analysis.get("structure"))),
+        ]
+    )
+    target_text = clean_string(target_topic)
+    reference_terms = keyword_set(reference_text)
+    target_terms = keyword_set(target_text)
+    overlap = reference_terms & target_terms
+    compatible = bool(overlap) or same_coarse_domain(reference_terms, target_terms)
+    if compatible:
+        return {
+            "mode": "transfer_structure",
+            "reason": "参考视频和目标主题有相近领域或关键词，可迁移段落顺序。",
+        }
+    return {
+        "mode": "target_native",
+        "reason": "参考视频主题和目标主题差异较大，只借鉴节奏，不强行套用原结构。",
+    }
+
+
+def keyword_set(text: str) -> set[str]:
+    compact = re.sub(r"[^\w\u4e00-\u9fff]+", " ", text)
+    tokens = {token for token in compact.split() if len(token) >= 2}
+    cjk_terms = set(re.findall(r"[\u4e00-\u9fff]{2,6}", text))
+    stop_terms = {"这个主题", "参考视频", "知识口播", "观点口播", "内容", "结构", "开场", "结尾"}
+    return {term for term in tokens | cjk_terms if term not in stop_terms}
+
+
+def same_coarse_domain(reference_terms: set[str], target_terms: set[str]) -> bool:
+    domains = [
+        {"宇宙", "科学", "物理", "大爆炸", "碳原子", "信仰"},
+        {"学习", "期末", "老师", "复习", "课堂", "学生"},
+        {"职场", "沟通", "老板", "同事", "客户", "工作"},
+        {"小狗", "小猫", "动物", "宠物", "狗狗", "猫咪"},
+        {"AI", "编程", "工具", "开发者", "代码", "模型"},
+    ]
+    return any(reference_terms & domain and target_terms & domain for domain in domains)
+
+
+def target_topic_script_outlines(target_topic: str, target_notes: str, strategy: dict) -> list[dict]:
+    topic = clean_string(target_topic) or "这个主题"
+    subject = script_subject_from_target_topic(topic)
+    notes = clean_string(target_notes)
+    notes_line = f"结合你的补充资料：{notes}。" if notes else ""
+    if strategy.get("mode") == "transfer_structure":
+        return [
+            {
+                "scene": f"先抛出一个和{subject}有关的反差判断：很多人以为重点是资料多，其实观众先需要一个清楚入口。",
+                "explain": f"{notes_line}接着把这个判断放进具体场景，让观众知道为什么现在要关心{topic}。",
+                "details": f"中段拆三个层次：一个常见误解，一个具体例子，一个可以马上使用的判断标准。",
+                "close": f"最后给观众一个动作：用这三个层次重新观察一次{topic}，再决定要不要继续深入了解。",
+            },
+            {
+                "scene": f"从观众最熟悉的场景切入：他们第一次接触{subject}时，通常只看到表面。",
+                "explain": f"{notes_line}然后补上背后的原因，让内容从“好像知道”变成“真的理解”。",
+                "details": f"用短句连续推进：先讲误区，再讲原因，最后给一个能自己判断的例子。",
+                "close": f"结尾把话题收回到观众自己：下次看到{topic}，先问这一个问题。",
+            },
+            {
+                "scene": f"先给结论：{subject}最值得讲的不是标签，而是它和观众生活之间的连接。",
+                "explain": f"{notes_line}把这个连接讲清楚，内容才不会像百科词条。",
+                "details": f"中段用“看外表、看行为、看相处成本”这样的顺序，把抽象介绍变成可感知的信息。",
+                "close": f"最后提醒观众保存这套观察顺序，用它去判断更多类似主题。",
+            },
+        ]
+    return [
+        {
+            "scene": f"比如介绍{subject}，第一句话不要急着堆百科资料，先告诉观众它最容易被误解的一点。",
+            "explain": f"{notes_line}如果拿{subject}举例，很多人只看表面印象，但真正有用的是讲清楚它的特点、习惯和相处成本。",
+            "details": f"可以按三个问题展开：它是什么样的？适合什么人？照顾它最容易忽略什么？这样观众听完能马上形成判断。",
+            "close": f"结尾给一个简单动作：如果你想了解{subject}，先用“特点、适合人群、注意事项”这三项做一张小卡片。",
+        },
+        {
+            "scene": f"想把{subject}讲得有意思，先从一个真实画面开始，而不是从定义开始。",
+            "explain": f"{notes_line}比如把{subject}放进一个真实生活画面，这个画面背后可以讲亲近感、需求和相处边界。",
+            "details": f"接着补三类信息：一个外观或行为特征，一个日常照顾细节，一个新手容易踩的坑。",
+            "close": f"最后用一句话收束：喜欢{subject}之前，先了解它真实的生活需求。",
+        },
+        {
+            "scene": f"介绍{subject}时，最怕讲成流水账。先给观众一个判断：它适不适合你，比它漂不漂亮更重要。",
+            "explain": f"{notes_line}然后用具体例子解释这个判断，比如它需要怎样的陪伴、空间、时间或学习成本。",
+            "details": f"中段按“优点、挑战、适合人群”推进，每一段都给一个具体场景，避免空泛夸赞。",
+            "close": f"结尾邀请观众代入自己的生活节奏，判断自己更适合了解哪一种{subject}。",
+        },
+    ]
 
 
 def is_generic_structure(structure: list[dict]) -> bool:

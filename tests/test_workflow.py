@@ -63,6 +63,9 @@ class WorkflowServiceTest(unittest.TestCase):
         self.assertTrue(all(script["status"] == "draft" for script in detail["scripts"]))
         self.assertIn("AI 编程工具怎么影响普通开发者", detail["scripts"][0]["script_text"])
         self.assertNotIn("很多人做职场沟通的三个误区", detail["scripts"][0]["script_text"])
+        self.assertNotIn("写作模式", detail["scripts"][0]["script_text"])
+        self.assertNotIn("目标主题素材", detail["scripts"][0]["script_text"])
+        self.assertNotIn("这版适合", detail["scripts"][0]["script_text"])
 
     def test_render_requires_approved_script(self) -> None:
         # Test objective:
