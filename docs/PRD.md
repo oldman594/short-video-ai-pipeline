@@ -238,6 +238,9 @@ MVP 目标：
 - source_url
 - source_file_id
 - platform
+- title
+- target_topic
+- notes
 - status
 - created_at
 - updated_at
@@ -310,6 +313,7 @@ MVP 目标：
 ## 9. MVP 验收标准
 
 - 用户可以创建项目并导入视频链接或上传视频。
+- 用户可以指定新视频主题，系统基于参考视频结构围绕新主题生成脚本。
 - 系统可以完成音频提取和 ASR 转写。
 - 系统可以生成结构化分析结果。
 - 系统可以生成至少 3 个原创脚本版本。

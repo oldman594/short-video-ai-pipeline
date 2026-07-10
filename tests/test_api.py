@@ -87,6 +87,7 @@ class ApiValidationTest(unittest.TestCase):
             {
                 "source_type": "link",
                 "title": "链接附带文件测试",
+                "target_topic": "AI 编程工具选型",
                 "platform": "douyin",
                 "source_url": "https://www.douyin.com/video/123",
                 "extraction_preference": "auto",
@@ -109,6 +110,7 @@ class ApiValidationTest(unittest.TestCase):
 
         self.assertEqual(response.status, 201)
         self.assertEqual(body["source_type"], "link")
+        self.assertEqual(body["target_topic"], "AI 编程工具选型")
         self.assertTrue(body["source_file_path"])
 
     def test_serves_public_photo_files_for_avatar_source_urls(self) -> None:

@@ -31,17 +31,21 @@ class WorkflowServiceTest(unittest.TestCase):
         # 3. Run the workflow synchronously to avoid timing assumptions from background threads.
         #
         # Input data:
-        # The source is a Douyin-style link record with a title, platform, URL, and user notes.
+        # The source is a Douyin-style link record with a reference title, a separate
+        # target topic for the new script, platform, URL, and user notes.
         #
         # Expected behavior:
         # The project status becomes ready_for_review, one editable transcript is stored,
         # one structured analysis is stored, and exactly three draft script versions are stored.
+        # Structure analysis remains about the reference video title, while generated
+        # scripts use the selected target topic as the new content theme.
         project = self.repository.create_project(
             {
                 "source_type": "link",
                 "source_url": "https://example.test/video/123",
                 "platform": "douyin",
                 "title": "职场沟通的三个误区",
+                "target_topic": "AI 编程工具怎么影响普通开发者",
                 "notes": "目标观众是刚入职新人",
             }
         )
@@ -57,6 +61,8 @@ class WorkflowServiceTest(unittest.TestCase):
         self.assertEqual(detail["analysis"]["topic"], "职场沟通的三个误区")
         self.assertEqual(len(detail["scripts"]), 3)
         self.assertTrue(all(script["status"] == "draft" for script in detail["scripts"]))
+        self.assertIn("AI 编程工具怎么影响普通开发者", detail["scripts"][0]["script_text"])
+        self.assertNotIn("很多人做职场沟通的三个误区", detail["scripts"][0]["script_text"])
 
     def test_render_requires_approved_script(self) -> None:
         # Test objective:

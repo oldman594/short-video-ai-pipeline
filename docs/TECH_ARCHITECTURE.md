@@ -220,6 +220,8 @@ CREATE TABLE projects (
   source_file_id UUID,
   platform TEXT,
   title TEXT,
+  target_topic TEXT,
+  notes TEXT,
   extraction_preference TEXT NOT NULL,
   status TEXT NOT NULL,
   created_at TIMESTAMP NOT NULL,

@@ -287,13 +287,21 @@ class ProviderBranchTest(unittest.TestCase):
 
         provider = FakeDeepSeek(api_key="test-key", base_url="https://example.test", timeout_seconds=1)
         analysis = provider.analyze("你是不是总在期末慌？第一步先看重点。", "复习规划", "douyin")
-        scripts = provider.generate_scripts("你是不是总在期末慌？第一步先看重点。", analysis, "复习规划")
+        scripts = provider.generate_scripts(
+            "你是不是总在期末慌？第一步先看重点。",
+            analysis,
+            "复习规划",
+            target_topic="AI 学习助手",
+            target_notes="面向大学新生，强调具体使用边界",
+        )
 
         self.assertEqual(len(scripts), 2)
         self.assertEqual(scripts[0]["script_text"], "先给结论。\n再拆原因。")
         self.assertEqual(scripts[0]["title_options"], ["复习先定顺序"])
         self.assertIn("开场模式", provider.script_payload["messages"][1]["content"])
         self.assertIn("结构步骤", provider.script_payload["messages"][1]["content"])
+        self.assertIn("用户选择的新主题：AI 学习助手", provider.script_payload["messages"][1]["content"])
+        self.assertIn("面向大学新生", provider.script_payload["messages"][1]["content"])
         self.assertNotIn("很多人做学习规划", scripts[0]["script_text"])
 
     def test_default_llm_provider_selects_deepseek_only_when_api_key_exists(self) -> None:

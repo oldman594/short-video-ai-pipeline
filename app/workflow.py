@@ -61,6 +61,8 @@ class WorkflowService:
                 transcript["raw_text"],
                 analysis=analysis,
                 title=project["title"],
+                target_topic=project.get("target_topic") or project["title"],
+                target_notes=project["notes"],
             )
             self.repository.replace_scripts(project_id, scripts)
             self.repository.update_project_status(project_id, "ready_for_review")

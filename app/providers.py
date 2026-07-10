@@ -79,11 +79,19 @@ class MockLLMProvider:
             "provider": self.name,
         }
 
-    def generate_scripts(self, transcript: str, analysis: dict, title: str) -> list[dict]:
-        topic = analysis.get("topic") or title or "这个主题"
+    def generate_scripts(
+        self,
+        transcript: str,
+        analysis: dict,
+        title: str,
+        target_topic: str | None = None,
+        target_notes: str | None = None,
+    ) -> list[dict]:
+        topic = clean_string(target_topic) or analysis.get("topic") or title or "这个主题"
         writing_profile = derive_writing_profile(transcript, analysis)
         structure_line = " -> ".join(writing_profile["structure_steps"])
         rhythm_line = writing_profile["rhythm"]
+        target_brief = build_target_topic_brief(topic, target_notes or "")
         hooks = [
             f"很多人做{topic}，问题不是不会做，而是开头就站错了位置。",
             f"如果你也在研究{topic}，先别急着找技巧，先把判断顺序理清楚。",
@@ -103,9 +111,11 @@ class MockLLMProvider:
 
                 这版参考的不是原文句子，而是它的写作模式：{structure_line}。节奏上用{rhythm_line}，让观众不用等铺垫，先听到结论。
 
-                {transitions[0]}：把观众正在遇到的具体问题说出来。不要讲一大段背景，直接指出一个他们会点头的瞬间。
+                目标主题素材：{target_brief}
 
-                {transitions[1]}：把这个问题为什么反复出现讲清楚。这里换成我们自己的案例和表达，只保留“先判断、再解释、再给路径”的推进方式。
+                {transitions[0]}：把{topic}里观众正在遇到的具体问题说出来。不要讲一大段背景，直接指出一个他们会点头的瞬间。
+
+                {transitions[1]}：把这个问题为什么反复出现讲清楚。这里必须换成{topic}自己的案例和表达，只保留参考视频“先判断、再解释、再给路径”的推进方式。
 
                 {transitions[2]}：给三个可以马上执行的小步骤。第一步先定目标观众，第二步重写案例，第三步检查有没有复用原视频的句子、口头禅和身份表达。
 
@@ -170,19 +180,47 @@ class DeepSeekAnalysisProvider:
         analysis = parse_json_object(content)
         return normalize_analysis(analysis, title, transcript, self.name)
 
-    def generate_scripts(self, transcript: str, analysis: dict, title: str) -> list[dict]:
+    def generate_scripts(
+        self,
+        transcript: str,
+        analysis: dict,
+        title: str,
+        target_topic: str | None = None,
+        target_notes: str | None = None,
+    ) -> list[dict]:
         writing_profile = derive_writing_profile(transcript, analysis)
+        resolved_target_topic = clean_string(target_topic) or analysis.get("topic") or title
+        resolved_target_notes = target_notes or ""
         try:
-            payload = self._script_generation_payload(transcript, analysis, title, writing_profile)
+            payload = self._script_generation_payload(
+                transcript,
+                analysis,
+                title,
+                writing_profile,
+                resolved_target_topic,
+                resolved_target_notes,
+            )
             response = self._post_chat_completion(payload)
             content = extract_chat_message_content(response)
             parsed = parse_json_object(content)
-            scripts = normalize_scripts(parsed.get("scripts"), analysis, title, transcript, writing_profile)
+            scripts = normalize_scripts(
+                parsed.get("scripts"),
+                analysis,
+                resolved_target_topic,
+                transcript,
+                writing_profile,
+            )
             if scripts:
                 return scripts
         except DeepSeekProviderError:
             pass
-        return self.script_provider.generate_scripts(transcript, analysis, title)
+        return self.script_provider.generate_scripts(
+            transcript,
+            analysis,
+            title,
+            target_topic=resolved_target_topic,
+            target_notes=resolved_target_notes,
+        )
 
     def _chat_completion_payload(self, transcript: str, title: str, platform: str) -> dict:
         system_prompt = dedent(
@@ -232,11 +270,22 @@ class DeepSeekAnalysisProvider:
             "max_tokens": 1800,
         }
 
-    def _script_generation_payload(self, transcript: str, analysis: dict, title: str, writing_profile: dict) -> dict:
+    def _script_generation_payload(
+        self,
+        transcript: str,
+        analysis: dict,
+        title: str,
+        writing_profile: dict,
+        target_topic: str,
+        target_notes: str,
+    ) -> dict:
         system_prompt = dedent(
             """
             你是短视频原创脚本策划。请只输出 json 对象，不要输出 markdown。
-            任务是参考原视频的写作结构、节奏和段落功能，生成新的原创数字人口播脚本。
+            任务是参考原视频的写作结构、节奏和段落功能，围绕用户选择的新主题生成原创数字人口播脚本。
+            参考视频只提供结构和表达节奏；目标主题才是新脚本的信息内容。
+            生成前先围绕目标主题整理可用素材：核心概念、目标受众痛点、常见误解、具体例子和可验证事实。
+            如果目标主题需要最新事实或具体数据，而用户没有提供资料，请标注“需人工核验”，不要编造精确数据。
             严禁逐句改写、搬运原文金句、复用原作者独特身份表达、声音或口头禅。
 
             json schema:
@@ -258,8 +307,13 @@ class DeepSeekAnalysisProvider:
             f"""
             请生成 3 个原创视频稿版本，每版 45 到 60 秒。
 
-            标题：{title or analysis.get("topic") or "未填写"}
-            主题：{analysis.get("topic") or "未识别"}
+            参考视频标题：{title or "未填写"}
+            参考视频主题：{analysis.get("topic") or "未识别"}
+            用户选择的新主题：{target_topic or "未填写"}
+            用户补充资料：{target_notes or "无"}
+            目标主题素材提示：{build_target_topic_brief(target_topic, target_notes)}
+
+            请严格按“用户选择的新主题”写稿，不要继续写参考视频主题，除非二者相同。
             受众：{analysis.get("audience") or "短视频观众"}
             内容类型：{analysis.get("category") or "知识口播"}
             开场模式：{writing_profile["opening_pattern"]}
@@ -480,6 +534,20 @@ def normalize_analysis(analysis: dict, title: str, transcript: str, provider: st
         "risks": risks or fallback["risks"],
         "provider": provider,
     }
+
+
+def build_target_topic_brief(target_topic: str, target_notes: str) -> str:
+    topic = clean_string(target_topic) or "用户选择的新主题"
+    notes = clean_string(target_notes)
+    brief_parts = [
+        f"新稿主题是“{topic}”，脚本内容必须围绕这个主题展开。",
+        f"先说明{topic}里最容易被忽略的判断，再给出观众能理解的场景或例子。",
+        f"中段可以拆成“常见误解、原因解释、具体做法”三类素材。",
+        "如果涉及最新数据、政策、价格、人物评价或医学金融法律等高风险事实，需要标注人工核验。",
+    ]
+    if notes:
+        brief_parts.insert(1, f"用户补充资料：{notes}。")
+    return " ".join(brief_parts)
 
 
 def is_generic_structure(structure: list[dict]) -> bool:

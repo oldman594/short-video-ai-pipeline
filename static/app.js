@@ -139,7 +139,8 @@ function renderDetail() {
   els.detail.classList.remove("hidden");
   els.projectPlatform.textContent = project.platform || "unknown";
   els.projectTitle.textContent = project.title;
-  els.projectMeta.textContent = `${project.source_type === "upload" ? "上传视频" : "视频链接"} · ${extractionLabel(project.extraction_preference)} · ${project.updated_at}`;
+  const targetTopic = project.target_topic ? ` · 新主题：${project.target_topic}` : "";
+  els.projectMeta.textContent = `${project.source_type === "upload" ? "上传视频" : "视频链接"} · ${extractionLabel(project.extraction_preference)}${targetTopic} · ${project.updated_at}`;
   els.projectStatus.textContent = statusLabel(project.status);
 
   if (project.error_message) {
@@ -371,6 +372,7 @@ els.form.addEventListener("submit", async (event) => {
     title: formData.get("title"),
     platform: formData.get("platform"),
     source_url: formData.get("source_url"),
+    target_topic: formData.get("target_topic"),
     notes: formData.get("notes"),
     extraction_preference: formData.get("extraction_preference"),
   };

@@ -126,6 +126,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 "source_file_path": source_file_path,
                 "platform": payload.get("platform"),
                 "title": payload.get("title"),
+                "target_topic": payload.get("target_topic") or payload.get("targetTopic"),
                 "notes": payload.get("notes"),
                 "extraction_preference": extraction_preference,
             }

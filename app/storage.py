@@ -45,6 +45,7 @@ class Repository:
                   source_file_path TEXT,
                   platform TEXT,
                   title TEXT,
+                  target_topic TEXT,
                   notes TEXT,
                   extraction_preference TEXT NOT NULL DEFAULT 'auto',
                   status TEXT NOT NULL,
@@ -109,6 +110,7 @@ class Repository:
                 """
             )
             self._ensure_column(conn, "projects", "extraction_preference", "TEXT NOT NULL DEFAULT 'auto'")
+            self._ensure_column(conn, "projects", "target_topic", "TEXT")
             self._ensure_column(conn, "transcripts", "extraction_method", "TEXT NOT NULL DEFAULT 'speech'")
             self._ensure_column(conn, "transcripts", "warnings_json", "TEXT NOT NULL DEFAULT '[]'")
             self._ensure_column(conn, "transcripts", "subtitle_file_url", "TEXT")
@@ -130,9 +132,9 @@ class Repository:
                 """
                 INSERT INTO projects (
                   id, user_id, source_type, source_url, source_file_path, platform,
-                  title, notes, extraction_preference, status, error_message, created_at, updated_at
+                  title, target_topic, notes, extraction_preference, status, error_message, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     project_id,
@@ -142,6 +144,7 @@ class Repository:
                     payload.get("source_file_path"),
                     payload.get("platform") or "unknown",
                     payload.get("title") or "未命名项目",
+                    payload.get("target_topic") or "",
                     payload.get("notes") or "",
                     payload.get("extraction_preference") or "auto",
                     "queued",
@@ -460,6 +463,7 @@ class Repository:
             "source_file_path": row["source_file_path"],
             "platform": row["platform"],
             "title": row["title"],
+            "target_topic": row["target_topic"],
             "notes": row["notes"],
             "extraction_preference": row["extraction_preference"],
             "status": row["status"],
