@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,27 +66,16 @@ class MockLLMProvider:
 
     def analyze(self, transcript: str, title: str, platform: str) -> dict:
         topic = title or self._derive_topic(transcript)
+        lines = meaningful_transcript_lines(transcript)
+        structure = derive_content_structure(lines, topic)
         return {
             "topic": topic,
-            "audience": "希望快速理解并应用该主题的短视频观众",
-            "category": "知识口播",
-            "hook": "用一个反常识判断或高频痛点开场，压缩进入主题的时间。",
-            "structure": [
-                {"step": "hook", "summary": "开场指出观众正在犯的错误。"},
-                {"step": "problem", "summary": "解释问题为什么会反复出现。"},
-                {"step": "framework", "summary": "给出 3 个可执行步骤。"},
-                {"step": "close", "summary": "用复盘问题引导收藏、评论或转发。"},
-            ],
-            "key_points": [
-                "开头不要铺垫背景，先给判断。",
-                "中段用具体场景承接观点。",
-                "结尾要给观众一个可以马上执行的动作。",
-            ],
-            "risks": [
-                "不要逐句复用原视频文案。",
-                "不要复用原作者独特口头禅或身份表达。",
-                "发布前需要人工确认事实、案例和平台敏感表达。",
-            ],
+            "audience": derive_content_audience(lines, topic),
+            "category": derive_content_category(lines),
+            "hook": derive_content_hook(lines, topic),
+            "structure": structure,
+            "key_points": derive_content_key_points(lines, structure),
+            "risks": derive_content_risks(lines, topic),
             "provider": self.name,
         }
 
@@ -148,7 +138,7 @@ class MockLLMProvider:
 
     @staticmethod
     def _derive_topic(transcript: str) -> str:
-        compact = transcript.strip().replace("\n", "")
+        compact = " ".join(meaningful_transcript_lines(transcript)).replace(" ", "")
         return compact[:16] or "参考视频"
 
 
@@ -198,7 +188,9 @@ class DeepSeekAnalysisProvider:
         system_prompt = dedent(
             """
             你是短视频内容结构分析师。请只输出 json 对象，不要输出 markdown。
-            目标是分析参考视频的选题、受众、开场钩子、叙事结构、可迁移要点和风险。
+            目标是分析参考视频的选题、受众、开场钩子、叙事结构、写作模式、可迁移要点和风险。
+            每个字段都必须结合转写文本里的具体对象、概念、例子或原有段落功能。
+            不要输出“观众正在犯的错误”“给出 3 个步骤”“引导收藏评论”等通用模板，除非转写文本确实这么表达。
             不能逐句复刻原文，不能建议克隆原作者身份、声音、脸或独特口头禅。
 
             json schema:
@@ -206,16 +198,21 @@ class DeepSeekAnalysisProvider:
               "topic": "主题",
               "audience": "目标受众",
               "category": "内容类型",
-              "hook": "开场钩子总结",
-              "structure": [{"step": "hook", "summary": "这一段承担的作用"}],
-              "key_points": ["可迁移的原创表达要点"],
-              "risks": ["合规、事实或相似度风险"]
+              "hook": "结合具体内容的开场钩子总结",
+              "structure": [{"step": "内容段落名称", "summary": "这一段讲了什么具体内容以及承担的叙事作用"}],
+              "key_points": ["结合具体内容的可迁移原创表达要点"],
+              "risks": ["结合具体内容的合规、事实或相似度风险"]
             }
             """
         ).strip()
         user_prompt = dedent(
             f"""
             请基于下面信息输出 json 结构分析。
+            输出要求：
+            1. structure 至少 4 段；step 使用中文段落名，不要使用 hook/problem/framework/close 这种占位词。
+            2. 每段 summary 必须包含转写文本里的具体词，例如人物、问题、概念、数字、类比或结论。
+            3. key_points 必须描述这个视频实际可学习的表达方式，不能写空泛方法论。
+            4. 如果转写有 OCR 错字，请根据上下文保守概括，不要编造视频外信息。
 
             标题：{title or "未填写"}
             平台：{platform or "unknown"}
@@ -339,21 +336,183 @@ def parse_json_object(content: str) -> dict:
     return parsed
 
 
+def meaningful_transcript_lines(transcript: str, limit: int = 80) -> list[str]:
+    lines: list[str] = []
+    for raw_line in transcript.splitlines():
+        line = clean_string(raw_line)
+        if not line:
+            continue
+        if is_low_value_analysis_line(line):
+            continue
+        lines.append(line)
+    if lines:
+        return dedupe_preserving_order(lines)[:limit]
+    compact = clean_string(transcript)
+    if not compact:
+        return []
+    return [compact[:40]]
+
+
+def is_low_value_analysis_line(line: str) -> bool:
+    compact = re.sub(r"\s+", "", line)
+    if len(compact) <= 1:
+        return True
+    platform_markers = ("抖音号", "截图保存", "扫一扫", "搜索页", "发现更多创作者")
+    return any(marker in compact for marker in platform_markers)
+
+
+def derive_content_structure(lines: list[str], topic: str) -> list[dict]:
+    if not lines:
+        return [{"step": "内容概览", "summary": f"围绕{topic}展开，但当前转写文本太短，需要人工补充上下文。"}]
+    marker_indexes = [
+        index
+        for index, line in enumerate(lines)
+        if re.search(r"第[一二三四五六七八九十0-9]+个|第一|第二|第三", line)
+    ]
+    sections: list[tuple[str, list[str]]] = []
+    if marker_indexes:
+        if marker_indexes[0] > 0:
+            sections.append(("开场设问", lines[: marker_indexes[0]]))
+        for position, start in enumerate(marker_indexes):
+            end = marker_indexes[position + 1] if position + 1 < len(marker_indexes) else len(lines)
+            sections.append((strip_terminal_punctuation(lines[start]) or f"段落 {position + 1}", lines[start:end]))
+    else:
+        section_count = min(4, max(2, len(lines)))
+        chunk_size = max(1, (len(lines) + section_count - 1) // section_count)
+        names = ["开场信息", "核心展开", "论证推进", "结尾收束"]
+        for index in range(section_count):
+            chunk = lines[index * chunk_size : (index + 1) * chunk_size]
+            if chunk:
+                sections.append((names[min(index, len(names) - 1)], chunk))
+
+    structure = []
+    for name, chunk in sections[:6]:
+        summary = summarize_content_lines(chunk)
+        if summary:
+            structure.append({"step": name[:20], "summary": summary})
+    return structure or [{"step": "内容概览", "summary": summarize_content_lines(lines[:6])}]
+
+
+def summarize_content_lines(lines: list[str]) -> str:
+    selected = [strip_terminal_punctuation(line) for line in lines if clean_string(line)]
+    selected = selected[:4]
+    summary = "、".join(selected)
+    return summary[:90] if summary else ""
+
+
+def derive_content_hook(lines: list[str], topic: str) -> str:
+    if not lines:
+        return f"围绕{topic}开场，但当前转写文本不足，需要人工补充。"
+    opening = "、".join(strip_terminal_punctuation(line) for line in lines[:4])
+    return f"开头用“{opening[:60]}”把观众带入{topic}。"
+
+
+def derive_content_audience(lines: list[str], topic: str) -> str:
+    joined = "\n".join(lines)
+    if any(term in joined for term in ("宇宙", "物理", "科学", "大爆炸", "碳原子")):
+        return "对宇宙、科学与信仰关系感兴趣的泛科普观众"
+    if any(term in joined for term in ("期末", "老师", "学习", "学术", "复习")):
+        return "关注学习效率、课堂和复习场景的学生群体"
+    if any(term in joined for term in ("职场", "沟通", "老板", "同事", "客户")):
+        return "希望解决职场沟通和工作决策问题的观众"
+    return f"已经关注{topic}、希望从短视频里快速获得观点和例子的观众"
+
+
+def derive_content_category(lines: list[str]) -> str:
+    joined = "\n".join(lines)
+    if any(term in joined for term in ("宇宙", "物理", "科学", "大爆炸", "碳原子")):
+        return "泛科普观点口播"
+    if any(term in joined for term in ("第一个", "第二个", "第三个", "误解")):
+        return "观点拆解口播"
+    if any(term in joined for term in ("教程", "步骤", "方法", "清单")):
+        return "方法论口播"
+    return "知识观点口播"
+
+
+def derive_content_key_points(lines: list[str], structure: list[dict]) -> list[str]:
+    points: list[str] = []
+    if lines:
+        points.append(f"开场先抓住具体意象：{summarize_content_lines(lines[:3])}。")
+    if any("误解" in item["step"] or "误解" in item["summary"] for item in structure):
+        points.append("中段用“第一个误解、第二个误解、第三个误解”的连续拆解保持推进感。")
+    if any(term in "\n".join(lines) for term in ("宇宙", "大爆炸", "碳原子", "扑克牌")):
+        points.append("用宇宙、碳原子、扑克牌这类具象类比承接抽象观点，降低理解门槛。")
+    if lines:
+        points.append(f"结尾可学习它把讨论收回到观众自身选择：{summarize_content_lines(lines[-4:])}。")
+    return points[:4] or ["先抽取原视频的具体意象和段落顺序，再重新组织为原创表达。"]
+
+
+def derive_content_risks(lines: list[str], topic: str) -> list[str]:
+    risks = [
+        f"围绕{topic}再创作时不要复用原视频的连续句子和独特表达。",
+        "OCR 文本可能有错字，发布前需要人工核对关键名词、数字和事实。",
+    ]
+    joined = "\n".join(lines)
+    if any(term in joined for term in ("科学", "宇宙", "大爆炸", "杨振宁", "物理")):
+        risks.append("涉及科学、人物或宇宙论观点时，需要核实表述，避免把观点包装成确定事实。")
+    return risks
+
+
+def dedupe_preserving_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result = []
+    for value in values:
+        if value not in seen:
+            seen.add(value)
+            result.append(value)
+    return result
+
+
 def normalize_analysis(analysis: dict, title: str, transcript: str, provider: str) -> dict:
     fallback = MockLLMProvider().analyze(transcript, title, "unknown")
     structure = normalize_structure_list(analysis.get("structure"))
     key_points = normalize_string_list(analysis.get("key_points"))
     risks = normalize_string_list(analysis.get("risks"))
+    hook = clean_string(analysis.get("hook"))
+    grounded_key_points = [item for item in key_points if not is_generic_analysis_text(item)]
     return {
         "topic": clean_string(analysis.get("topic")) or fallback["topic"],
         "audience": clean_string(analysis.get("audience")) or fallback["audience"],
         "category": clean_string(analysis.get("category")) or fallback["category"],
-        "hook": clean_string(analysis.get("hook")) or fallback["hook"],
-        "structure": structure or fallback["structure"],
-        "key_points": key_points or fallback["key_points"],
+        "hook": hook if hook and not is_generic_analysis_text(hook) else fallback["hook"],
+        "structure": structure if structure and not is_generic_structure(structure) else fallback["structure"],
+        "key_points": grounded_key_points or fallback["key_points"],
         "risks": risks or fallback["risks"],
         "provider": provider,
     }
+
+
+def is_generic_structure(structure: list[dict]) -> bool:
+    generic_steps = {"hook", "problem", "framework", "close", "opening", "solution"}
+    generic_count = 0
+    for item in structure:
+        step = clean_string(item.get("step")).lower()
+        summary = clean_string(item.get("summary"))
+        if step in generic_steps or is_generic_analysis_text(summary):
+            generic_count += 1
+    return generic_count >= max(1, len(structure) // 2)
+
+
+def is_generic_analysis_text(text: str) -> bool:
+    compact = re.sub(r"\s+", "", text)
+    if not compact:
+        return True
+    generic_markers = (
+        "反常识开场",
+        "高频痛点",
+        "观众正在犯的错误",
+        "为什么会反复出现",
+        "3个可执行步骤",
+        "三个可执行步骤",
+        "引导收藏",
+        "评论或转发",
+        "保留结构",
+        "不复用原句",
+        "不要铺垫背景",
+        "具体场景承接观点",
+        "马上执行的动作",
+    )
+    return any(marker in compact for marker in generic_markers)
 
 
 def derive_writing_profile(transcript: str, analysis: dict) -> dict:

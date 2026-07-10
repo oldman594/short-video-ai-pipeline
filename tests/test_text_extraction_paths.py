@@ -105,6 +105,8 @@ class ProviderBranchTest(unittest.TestCase):
 
         analysis = MockLLMProvider().analyze("第一句话用于推导主题", title="", platform="local")
         self.assertEqual(analysis["topic"], "第一句话用于推导主题")
+        self.assertIn("第一句话用于推导主题", analysis["hook"])
+        self.assertNotEqual([item["step"] for item in analysis["structure"]], ["hook", "problem", "framework", "close"])
         scripts = MockLLMProvider().generate_scripts("text", analysis, "")
         self.assertEqual(len(scripts), 3)
 
@@ -150,7 +152,8 @@ class ProviderBranchTest(unittest.TestCase):
         analysis = provider.analyze("期末复习要先抓重点", title="学习技巧", platform="douyin")
         self.assertEqual(analysis["provider"], "deepseek-analysis-v1")
         self.assertEqual(analysis["topic"], "学习方法")
-        self.assertEqual(analysis["structure"][0]["step"], "hook")
+        self.assertIn("期末复习", analysis["hook"])
+        self.assertNotEqual(analysis["structure"][0]["step"], "hook")
         self.assertIn("json_object", str(provider.last_payload["response_format"]))
         self.assertEqual(len(provider.generate_scripts("text", analysis, "学习技巧")), 3)
 

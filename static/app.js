@@ -164,6 +164,7 @@ function renderAnalysis(analysis) {
     return;
   }
   els.analysisView.innerHTML = `
+    ${analysisBlock("分析来源", analysis.provider)}
     ${analysisBlock("主题", analysis.topic)}
     ${analysisBlock("目标受众", analysis.audience)}
     ${analysisBlock("开头钩子", analysis.hook)}
