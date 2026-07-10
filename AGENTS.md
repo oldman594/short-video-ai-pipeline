@@ -39,6 +39,7 @@
 
 ## Architecture Rules
 
+- Text files committed to the repository MUST be at most 400 lines. If a text file would exceed 400 lines, agents MUST split it into focused modules or documents before committing. Binary media and generated local artifacts are outside this line-count rule.
 - Long-running work MUST be modeled as asynchronous jobs, not blocking request handlers.
 - API code MUST not directly bind business logic to a single third-party provider.
 - Third-party integrations MUST go through provider adapters such as ASR, LLM, AvatarVideo, Storage, and Publish providers.
@@ -93,3 +94,4 @@
 
 - If a rule can be checked mechanically, the project SHOULD enforce it with linting, tests, templates, CI, or pre-commit hooks.
 - Agents SHOULD add automation for repeated checks when doing so is small, local, and directly related to the task.
+- The repository MUST run `python3 scripts/check_file_line_limits.py --staged` before commit. Any staged text file above 400 lines MUST fail the commit and be split first.
