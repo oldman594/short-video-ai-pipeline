@@ -951,6 +951,59 @@ class TextExtractionBranchTest(unittest.TestCase):
         self.assertIn("第一行画面字幕", result["raw_text"])
         self.assertNotIn("subtitle_file_url", result)
 
+    def test_subtitle_track_preference_falls_back_to_screen_text_for_burned_in_subtitles(self) -> None:
+        # Test objective:
+        # Verify the browser-facing route when a user selects "subtitle track" for
+        # a short-video file whose captions are actually burned into the picture.
+        #
+        # Construction method:
+        # 1. Replace the subtitle-track extractor with a fallback result representing
+        #    "no independent subtitle stream".
+        # 2. Replace the screen-text extractor with a successful OCR result.
+        # 3. Run the router with explicit subtitle_track preference and a local file.
+        #
+        # Input data:
+        # A local media source with source_file_path, a subtitle-track fallback, and
+        # a successful RapidOCR transcript.
+        #
+        # Expected behavior:
+        # The router returns the OCR transcript and preserves the subtitle warning so
+        # the UI explains why it moved from independent subtitles to screen OCR.
+        class FakeExtractor:
+            def __init__(self, method: str, provider: str, text: str, warnings: list[str] | None = None):
+                self.method = method
+                self.provider = provider
+                self.text = text
+                self.warnings = warnings or []
+
+            def extract(self, _source: SourceInput):
+                return result_from_text(
+                    self.text,
+                    provider=self.provider,
+                    extraction_method=self.method,
+                    warnings=self.warnings,
+                )
+
+        router = TextExtractionRouter()
+        router.extractors["subtitle_track"] = FakeExtractor(
+            "subtitle_track",
+            "ffmpeg-or-mkvtoolnix-fallback",
+            "字幕轨回退文本",
+            ["视频没有检测到独立字幕轨"],
+        )
+        router.extractors["screen_text"] = FakeExtractor(
+            "screen_text",
+            "ffmpeg-rapidocr",
+            "第一行画面字幕\n第二行画面字幕",
+        )
+
+        result = router.extract(source(source_file_path="/tmp/media.mp4"), "subtitle_track")
+
+        self.assertEqual(result["extraction_method"], "screen_text")
+        self.assertEqual(result["provider"], "ffmpeg-rapidocr")
+        self.assertIn("第一行画面字幕", result["raw_text"])
+        self.assertTrue(any("独立字幕轨" in warning for warning in result["warnings"]))
+
     def test_auto_local_media_falls_back_to_speech_when_screen_text_quality_is_low(self) -> None:
         # Test objective:
         # Ensure that a weak OCR result does not override a real speech transcript.

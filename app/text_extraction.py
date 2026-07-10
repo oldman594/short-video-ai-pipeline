@@ -352,6 +352,8 @@ class TextExtractionRouter:
         ).to_transcript()
 
     def plan(self, source: SourceInput, preference: str) -> list[str]:
+        if preference == "subtitle_track" and source.source_file_path:
+            return ["subtitle_track", "screen_text"]
         if preference != "auto":
             return [preference]
         if source.source_file_path:

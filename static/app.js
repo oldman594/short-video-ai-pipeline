@@ -191,9 +191,9 @@ function renderExtractionInfo(transcript) {
 function extractionLabel(value) {
   const labels = {
     auto: "自动判断",
-    subtitle_track: "字幕轨",
+    subtitle_track: "独立字幕轨",
     speech: "语音识别",
-    screen_text: "画面文字 OCR",
+    screen_text: "画面字幕 OCR",
     network_captions: "网络字幕",
     auto_combined: "自动合并",
   };
@@ -347,8 +347,8 @@ els.sourceType.addEventListener("change", () => {
   els.linkField.classList.toggle("hidden", isUpload);
   els.uploadLabel.textContent = isUpload ? "视频文件（必选）" : "已下载视频文件（可选）";
   els.uploadHelp.textContent = isUpload
-    ? "服务端会对这个文件执行字幕轨、语音识别或 OCR 提取。"
-    : "链接会记录来源；如果平台链接无法直接提取，请附带你本地保存的视频文件，由服务端提取文本。";
+    ? "服务端会对这个文件执行独立字幕轨、语音识别或画面字幕 OCR 提取。"
+    : "链接会记录来源；如果平台链接无法直接提取，请附带你本地保存的视频文件，由服务端提取文本。抖音画面字幕建议用自动判断或 OCR。";
 });
 
 els.refreshTools.addEventListener("click", async () => {
